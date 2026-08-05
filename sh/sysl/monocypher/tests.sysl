@@ -1,4 +1,4 @@
-module monocypher
+module sh.sysl.monocypher
 
 // The published test vectors, run by `sysl test .`.
 //

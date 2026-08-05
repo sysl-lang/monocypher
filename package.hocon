@@ -4,9 +4,14 @@
 // (docs/design/packages.md sections 3 to 6); this package is consumed today with `build-lib` and
 // `--lib`, the way any sysl library is.
 
+// `name` is the package; the module a program imports is `sh.sysl.monocypher`, and the two are
+// deliberately different. The module carries the `sh.sysl.` prefix so that no package claims a
+// top-level word another one might want; the package name is the short one, because it names this
+// repository rather than a namespace.
+
 package {
   name    = "monocypher"
-  version = "0.1.0"
+  version = "0.2.0"
 }
 
 // **There is deliberately no `requires` block, and that is the point of this package.**

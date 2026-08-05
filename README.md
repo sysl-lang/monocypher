@@ -14,7 +14,7 @@ no clock, calls no allocator and asks the operating system for nothing, so there
 require and this builds for a freestanding target as readily as for a host.
 
 ```
-monocypher/
+sh/sysl/monocypher/
     monocypher.sysl         the binding
     tests.sysl              the published test vectors
     monocypher.c            vendored from LoupVaillant/Monocypher 4.0.3
@@ -23,6 +23,10 @@ monocypher/
     monocypher-ed25519.h
 package.hocon               who this package is, and what it needs of the machine
 ```
+
+The module is **`sh.sysl.monocypher`**, and the three directories are that name: a dotted module name
+mirrors its path from the library root. The prefix is the reverse-DNS of `sysl.sh`, so that a package
+claims a name nobody else will mint rather than the top-level word `monocypher`.
 
 ## Using it
 
@@ -34,7 +38,7 @@ sysl run yourprogram.sysl --lib /tmp/monocypher.syslib
 ## Example
 
 ```sysl
-import monocypher.*
+import sh.sysl.monocypher.*
 
 // A key and a nonce you brought from somewhere; see "Randomness" below.
 val key = your_random_bytes(32)

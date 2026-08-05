@@ -1,4 +1,4 @@
-module monocypher
+module sh.sysl.monocypher
 
 import sysl.text.str_builder_with_capacity
 
