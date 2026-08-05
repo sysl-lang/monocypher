@@ -1,0 +1,24 @@
+// Cryptography, bound to Monocypher.
+//
+// There is no `dependencies` block because dependency resolution is designed and not yet built
+// (docs/design/packages.md sections 3 to 6); this package is consumed today with `build-lib` and
+// `--lib`, the way any sysl library is.
+
+package {
+  name    = "monocypher"
+  version = "0.1.0"
+}
+
+// **There is deliberately no `requires` block, and that is the point of this package.**
+//
+// Monocypher includes `<stddef.h>` and `<stdint.h>` and nothing else -- verified against the
+// vendored 4.0.3 source, not assumed from its README. It opens no file, reads no clock, calls no
+// allocator and asks the operating system for nothing, so there is no capability to name.
+//
+// linenoise, the other vendored-C package, needs `posix = true` because it puts a terminal into raw
+// mode. The contrast is the useful part: a capability clause is a claim about what a library *does*,
+// and a library that does nothing but arithmetic on bytes it was handed makes no claim at all. This
+// is what lets the package build for a freestanding target.
+//
+// The one thing it cannot supply is randomness -- see the README. That is not a capability sysl
+// could grant it either; it is an input the caller has to bring.

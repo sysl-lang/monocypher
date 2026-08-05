@@ -1,0 +1,397 @@
+module monocypher
+
+// The published test vectors, run by `sysl test .`.
+//
+// **Nothing here is checked against a value this binding produced.** Every expected string below is
+// from the specification that defines the algorithm -- RFC 7693 for BLAKE2b, FIPS 180-4 for SHA-512,
+// RFC 7748 for X25519, RFC 8032 for Ed25519 -- so a test that passes says the bytes crossed the
+// boundary intact and came back the same, and a binding that dropped a length or swapped two
+// arguments could not make one of them pass by coincidence.
+//
+// That is the whole reason a cryptographic binding is worth testing this way and, say, a terminal
+// line editor is not: the answer is a fixed string that somebody else wrote down first.
+//
+// The round-trip and contract tests below cover what no vector can. A vector proves the algorithm
+// was reached; it does not prove that `unlock` rejects a message somebody altered, or that passing
+// a 31-byte key stops rather than reading a byte off the end.
+
+private nib(c: u8) -> u8 = if c >= 97 then c - 87 elif c >= 65 then c - 55 else c - 48
+
+// The inverse of `hex`, for writing a vector the way the specification prints it.
+private unhex(s: string) -> []u8
+    require s.bytes.len % 2 == 0, "a hexadecimal byte string has an even number of digits"
+
+    val b = s.bytes
+    var out: []u8 = [0u8; b.len / 2]
+
+    for i in 0..<out.len do out[i] = nib(b[i * 2]) * 16 + nib(b[i * 2 + 1])
+
+    out
+end unhex
+
+// -- BLAKE2b, RFC 7693 ---------------------------------------------------------------------------
+
+@test
+blake2b_matches_rfc_7693() =
+    var d: []u8 = [0u8; 64]
+
+    blake2b(d, "abc".bytes)
+    assert(hex(d) == "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d1" +
+                     "7d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923",
+           "blake2b-512 of abc")
+
+    blake2b(d, "".bytes)
+    assert(hex(d) == "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419" +
+                     "d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce",
+           "blake2b-512 of the empty string")
+
+// The digest size is the buffer's length, so this is also what pins that reading: a 32-byte buffer
+// must give BLAKE2b-256 and not the first half of BLAKE2b-512. The two differ from the first byte,
+// because the length goes into the initialization.
+@test
+blake2b_sizes_the_digest_from_the_buffer() =
+    var short: []u8 = [0u8; 32]
+    var full: []u8 = [0u8; 64]
+
+    blake2b(short, "abc".bytes)
+    blake2b(full, "abc".bytes)
+
+    assert(hex(short) == "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319",
+           "blake2b-256 of abc")
+    assert(hex(short) != hex(full)[0..<64], "a shorter digest is not a truncated longer one")
+
+@test
+blake2b_takes_a_key() =
+    var d: []u8 = [0u8; 64]
+    val key = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+                    "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")
+
+    blake2b_keyed(d, key, unhex("00"))
+    assert(hex(d) == "961f6dd1e4dd30f63901690c512e78e4b45e4742ed197c3c5e45c549fd25f2e4" +
+                     "187b0bc9fe30492b16b0d0bc4ef9b0f34c7003fac09a5ef1532e69430234cebd",
+           "the RFC 7693 keyed vector for a one-byte message")
+
+// An empty message is a real input, and `&b[0]` on an empty slice would be an out-of-bounds index.
+// This is what pins the scratch-pointer path in `first`.
+@test
+an_empty_slice_does_not_trap() =
+    var d: []u8 = [0u8; 32]
+    val nothing: []u8 = [0u8; 0]
+
+    blake2b(d, nothing)
+    assert(hex(d) == "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8",
+           "blake2b-256 of nothing at all")
+
+// -- SHA-512, FIPS 180-4 -------------------------------------------------------------------------
+
+@test
+sha512_matches_fips_180_4() =
+    var d: []u8 = [0u8; 64]
+
+    sha512(d, "abc".bytes)
+    assert(hex(d) == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a" +
+                     "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+           "sha-512 of abc")
+
+    sha512(d, "".bytes)
+    assert(hex(d) == "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce" +
+                     "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+           "sha-512 of the empty string")
+
+// -- X25519, RFC 7748 section 6.1 ----------------------------------------------------------------
+
+@test
+x25519_matches_rfc_7748() =
+    val alice_secret = unhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+    val bob_secret = unhex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
+
+    var alice_public: []u8 = [0u8; 32]
+    var bob_public: []u8 = [0u8; 32]
+
+    x25519_public_key(alice_public, alice_secret)
+    x25519_public_key(bob_public, bob_secret)
+
+    assert(hex(alice_public) == "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+           "alice's public key")
+    assert(hex(bob_public) == "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+           "bob's public key")
+
+    var from_alice: []u8 = [0u8; 32]
+    var from_bob: []u8 = [0u8; 32]
+
+    x25519(from_alice, alice_secret, bob_public)
+    x25519(from_bob, bob_secret, alice_public)
+
+    val want = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+
+    assert(hex(from_alice) == want, "the shared secret, from alice's side")
+    assert(hex(from_bob) == want, "the shared secret, from bob's side")
+
+// -- Ed25519, RFC 8032 section 7.1 ---------------------------------------------------------------
+
+@test
+ed25519_matches_rfc_8032() =
+    var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    var secret: []u8 = [0u8; 64]
+    var public: []u8 = [0u8; 32]
+
+    ed25519_key_pair(secret, public, seed)
+
+    assert(hex(public) == "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+           "TEST 1's public key")
+
+    var sig: []u8 = [0u8; 64]
+
+    ed25519_sign(sig, secret, "".bytes)
+    assert(hex(sig) == "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155" +
+                       "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+           "TEST 1's signature over the empty message")
+
+    assert(ed25519_check(sig, public, "".bytes), "and it verifies")
+
+// The seed is wiped by the key-pair call, which is a promise the documentation makes and the caller
+// cannot see any other way.
+@test
+ed25519_key_pair_wipes_the_seed() =
+    var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    var secret: []u8 = [0u8; 64]
+    var public: []u8 = [0u8; 32]
+
+    ed25519_key_pair(secret, public, seed)
+
+    assert(hex(seed) == "0000000000000000000000000000000000000000000000000000000000000000",
+           "the seed is gone")
+
+@test
+ed25519_rejects_an_altered_signature() =
+    var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    var secret: []u8 = [0u8; 64]
+    var public: []u8 = [0u8; 32]
+
+    ed25519_key_pair(secret, public, seed)
+
+    var sig: []u8 = [0u8; 64]
+
+    ed25519_sign(sig, secret, "attack at dawn".bytes)
+    assert(ed25519_check(sig, public, "attack at dawn".bytes), "the signature it made")
+    assert(!ed25519_check(sig, public, "attack at dusk".bytes), "but not for another message")
+
+    sig[0] = sig[0] ^ 1
+
+    assert(!ed25519_check(sig, public, "attack at dawn".bytes), "nor with one bit flipped")
+
+// The two signature schemes both produce 64 bytes over curve25519 and are not interchangeable. If
+// this ever passes, one of them has silently become the other.
+@test
+eddsa_and_ed25519_are_different_schemes() =
+    var seed_a = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    var seed_b = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+
+    var ed_secret: []u8 = [0u8; 64]
+    var ed_public: []u8 = [0u8; 32]
+    var bl_secret: []u8 = [0u8; 64]
+    var bl_public: []u8 = [0u8; 32]
+
+    ed25519_key_pair(ed_secret, ed_public, seed_a)
+    eddsa_key_pair(bl_secret, bl_public, seed_b)
+
+    var ed_sig: []u8 = [0u8; 64]
+    var bl_sig: []u8 = [0u8; 64]
+
+    ed25519_sign(ed_sig, ed_secret, "hello".bytes)
+    eddsa_sign(bl_sig, bl_secret, "hello".bytes)
+
+    assert(hex(ed_sig) != hex(bl_sig), "the same seed and message give different signatures")
+    assert(!ed25519_check(bl_sig, ed_public, "hello".bytes), "ed25519 rejects an eddsa signature")
+    assert(!eddsa_check(ed_sig, bl_public, "hello".bytes), "and eddsa rejects an ed25519 one")
+
+@test
+eddsa_verifies_its_own() =
+    var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    var secret: []u8 = [0u8; 64]
+    var public: []u8 = [0u8; 32]
+
+    eddsa_key_pair(secret, public, seed)
+
+    var sig: []u8 = [0u8; 64]
+
+    eddsa_sign(sig, secret, "hello".bytes)
+    assert(eddsa_check(sig, public, "hello".bytes), "the signature it made")
+    assert(!eddsa_check(sig, public, "hellp".bytes), "but not for another message")
+
+// -- XChaCha20-Poly1305 --------------------------------------------------------------------------
+
+private test_key() -> []u8 =
+    unhex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f")
+
+private test_nonce() -> []u8 = unhex("404142434445464748494a4b4c4d4e4f5051525354555657")
+
+@test
+aead_round_trips() =
+    val message = "the quick brown fox".bytes
+    val ad = "envelope".bytes
+
+    var cipher: []u8 = [0u8; 19]
+    var mac: []u8 = [0u8; 16]
+
+    lock(cipher, mac, test_key(), test_nonce(), ad, message)
+
+    assert(hex(cipher) != hex(message), "the ciphertext is not the plaintext")
+
+    var back: []u8 = [0u8; 19]
+
+    assert(unlock(back, mac, test_key(), test_nonce(), ad, cipher), "it unlocks")
+    assert(hex(back) == hex(message), "and the bytes are the ones that went in")
+
+// Each of the four things `unlock` authenticates, altered one at a time. A binding that passed the
+// wrong buffer for one of them would still round-trip, so the round trip alone does not cover this.
+@test
+aead_rejects_what_was_altered() =
+    val message = "the quick brown fox".bytes
+    val ad = "envelope".bytes
+
+    var cipher: []u8 = [0u8; 19]
+    var mac: []u8 = [0u8; 16]
+
+    lock(cipher, mac, test_key(), test_nonce(), ad, message)
+
+    var back: []u8 = [0u8; 19]
+
+    var wrong_key = test_key()
+
+    wrong_key[0] = wrong_key[0] ^ 1
+    assert(!unlock(back, mac, wrong_key, test_nonce(), ad, cipher), "a wrong key")
+
+    var wrong_nonce = test_nonce()
+
+    wrong_nonce[0] = wrong_nonce[0] ^ 1
+    assert(!unlock(back, mac, test_key(), wrong_nonce, ad, cipher), "a wrong nonce")
+
+    assert(!unlock(back, mac, test_key(), test_nonce(), "envelopf".bytes, cipher),
+           "altered associated data")
+
+    var altered = cipher
+
+    altered[0] = altered[0] ^ 1
+    assert(!unlock(back, mac, test_key(), test_nonce(), ad, altered), "altered ciphertext")
+
+@test
+aead_seals_an_empty_message() =
+    val nothing: []u8 = [0u8; 0]
+
+    var cipher: []u8 = [0u8; 0]
+    var mac: []u8 = [0u8; 16]
+
+    lock(cipher, mac, test_key(), test_nonce(), nothing, nothing)
+
+    var back: []u8 = [0u8; 0]
+
+    assert(unlock(back, mac, test_key(), test_nonce(), nothing, cipher),
+           "an empty message still carries a tag that verifies")
+
+// -- comparison and wiping -----------------------------------------------------------------------
+
+@test
+equal_compares_at_every_supported_size() =
+    val a = unhex("000102030405060708090a0b0c0d0e0f")
+    val b = unhex("000102030405060708090a0b0c0d0e0f")
+    val c = unhex("000102030405060708090a0b0c0d0e10")
+
+    assert(equal(a, b), "16 bytes, equal")
+    assert(!equal(a, c), "16 bytes, differing in the last")
+
+    val k = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    var k2 = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+
+    assert(equal(k, k2), "32 bytes, equal")
+
+    k2[0] = k2[0] ^ 1
+    assert(!equal(k, k2), "32 bytes, differing in the first")
+
+@test
+wipe_zeroes_a_buffer() =
+    var secret = unhex("000102030405060708090a0b0c0d0e0f")
+
+    wipe(secret)
+    assert(hex(secret) == "00000000000000000000000000000000", "nothing is left")
+
+// Wiping nothing is not an error, and it is the case that would index an empty slice.
+@test
+wipe_accepts_an_empty_buffer() =
+    var nothing: []u8 = [0u8; 0]
+
+    wipe(nothing)
+    assert(hex(nothing) == "", "there was nothing to wipe")
+
+// -- the contracts -------------------------------------------------------------------------------
+
+// Every `require` above is a promise that a wrong size stops here rather than reaching C, where it
+// would read past the end of a buffer. `should_trap` is how a stop is observed, since the run that
+// stops cannot report on itself.
+
+@test(should_trap)
+a_short_aead_key_is_refused() =
+    var cipher: []u8 = [0u8; 4]
+    var mac: []u8 = [0u8; 16]
+
+    lock(cipher, mac, unhex("0001020304050607"), test_nonce(), "".bytes, "abcd".bytes)
+
+@test(should_trap)
+a_short_nonce_is_refused() =
+    var cipher: []u8 = [0u8; 4]
+    var mac: []u8 = [0u8; 16]
+
+    lock(cipher, mac, test_key(), unhex("000102030405060708090a0b"), "".bytes, "abcd".bytes)
+
+@test(should_trap)
+a_ciphertext_of_the_wrong_length_is_refused() =
+    var cipher: []u8 = [0u8; 8]
+    var mac: []u8 = [0u8; 16]
+
+    lock(cipher, mac, test_key(), test_nonce(), "".bytes, "abcd".bytes)
+
+@test(should_trap)
+a_digest_buffer_longer_than_64_bytes_is_refused() =
+    var d: []u8 = [0u8; 65]
+
+    blake2b(d, "abc".bytes)
+
+@test(should_trap)
+an_empty_digest_buffer_is_refused() =
+    var d: []u8 = [0u8; 0]
+
+    blake2b(d, "abc".bytes)
+
+@test(should_trap)
+a_blake2b_key_longer_than_64_bytes_is_refused() =
+    var d: []u8 = [0u8; 32]
+    var key: []u8 = [0u8; 65]
+
+    blake2b_keyed(d, key, "abc".bytes)
+
+@test(should_trap)
+a_short_x25519_secret_key_is_refused() =
+    var public: []u8 = [0u8; 32]
+
+    x25519_public_key(public, unhex("0001020304050607"))
+
+@test(should_trap)
+an_ed25519_signature_buffer_of_the_wrong_size_is_refused() =
+    var sig: []u8 = [0u8; 32]
+    var secret: []u8 = [0u8; 64]
+
+    ed25519_sign(sig, secret, "abc".bytes)
+
+@test(should_trap)
+equal_refuses_a_size_it_cannot_compare() =
+    val a = unhex("00010203")
+    val b = unhex("00010203")
+
+    assert(equal(a, b), "four bytes is not one of the three sizes")
+
+@test(should_trap)
+equal_refuses_two_different_lengths() =
+    val a = unhex("000102030405060708090a0b0c0d0e0f")
+    val b = unhex("000102030405060708090a0b0c0d0e0f10")
+
+    assert(equal(a, b), "a length mismatch is not an answer of false")
