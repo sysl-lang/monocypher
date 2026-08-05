@@ -37,6 +37,11 @@ sysl run yourprogram.sysl --lib /tmp/monocypher.syslib
 
 ## Example
 
+A complete worked program lives at
+[`sysl-lang/monocypher-example`](https://github.com/sysl-lang/monocypher-example) — a key exchange,
+a signature and a sealed message in three files, runnable with `sysl run .`. It is also the shortest
+answer to what a sysl project with a dependency looks like. The sketch below is the shape of it.
+
 ```sysl
 import sh.sysl.monocypher.*
 
