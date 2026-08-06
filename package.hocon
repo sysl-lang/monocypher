@@ -1,8 +1,19 @@
 // Cryptography, bound to Monocypher.
 //
-// There is no `dependencies` block because dependency resolution is designed and not yet built
-// (docs/design/packages.md sections 3 to 6); this package is consumed today with `build-lib` and
-// `--lib`, the way any sysl library is.
+// There is no `dependencies` block because Monocypher depends on nothing -- it includes `<stddef.h>`
+// and `<stdint.h>` and that is the whole list.
+//
+// This is the block a *consumer* writes to reach this package, and resolution for it is built
+// (`design/packages.md` §§ 3-6): a `sysl build` fetches the coordinate, selects by MVS, checks what
+// arrived against `sysl.sum`, and compiles it as more modules.
+//
+//     dependencies {
+//       monocypher { git = "github.com/sysl-lang/monocypher", version = "0.2.0" }
+//     }
+//
+// The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
+// tag `v0.2.0` on this repository. `build-lib` and `--lib` still work and are what the tests here
+// use, but they are no longer the only way in.
 
 // `name` is the package; the module a program imports is `sh.sysl.monocypher`, and the two are
 // deliberately different. The module carries the `sh.sysl.` prefix so that no package claims a

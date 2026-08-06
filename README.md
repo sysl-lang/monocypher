@@ -30,6 +30,21 @@ claims a name nobody else will mint rather than the top-level word `monocypher`.
 
 ## Using it
 
+Name it in your project's `package.hocon` and `sysl build` fetches it:
+
+```hocon
+dependencies {
+  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.2.0" }
+}
+```
+
+The coordinate is an identity rather than a URL, so it carries no `https://`, and `version` is the
+tag `v0.2.0` here. Resolution clones it, selects versions by MVS, and records what arrived in
+`sysl.sum`.
+
+Or build it into an artifact and compile against that, which needs no fetching and is what this
+repository's own tests do:
+
 ```
 sysl build-lib . -o /tmp/monocypher.syslib
 sysl run yourprogram.sysl --lib /tmp/monocypher.syslib
