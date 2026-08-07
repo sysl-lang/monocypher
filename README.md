@@ -1,6 +1,6 @@
 # monocypher
 
-Cryptography for [sysl](https://github.com/edadma/sysl) — authenticated encryption, key exchange,
+Cryptography for [sysl](https://github.com/sysl-lang/sysl) — authenticated encryption, key exchange,
 signatures and hashing, bound to [Monocypher](https://monocypher.org) 4.0.3.
 
 **Nothing has to be installed to use this.** Monocypher is two C files that include `<stddef.h>` and
