@@ -34,12 +34,12 @@ Name it in your project's `package.hocon` and `sysl build` fetches it:
 
 ```hocon
 dependencies {
-  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.2.0" }
+  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.2.1" }
 }
 ```
 
 The coordinate is an identity rather than a URL, so it carries no `https://`, and `version` is the
-tag `v0.2.0` here. Resolution clones it, selects versions by MVS, and records what arrived in
+tag `v0.2.1` here. Resolution clones it, selects versions by MVS, and records what arrived in
 `sysl.sum`.
 
 Or build it into an artifact and compile against that, which needs no fetching and is what this

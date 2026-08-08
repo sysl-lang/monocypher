@@ -1,5 +1,6 @@
 module sh.sysl.monocypher
 
+import sysl.slices.{as_ptr, as_mut_ptr}
 import sysl.text.str_builder_with_capacity
 
 // Cryptography, bound to Monocypher 4.0.3.
@@ -21,6 +22,17 @@ import sysl.text.str_builder_with_capacity
 // and `size_t` and returns `int` or nothing, so there is no `#define` to read, no struct whose layout
 // only the header knows, and nothing for a shim to translate. `sysl/bindings/regex` needs one because
 // `sizeof(regex_t)` and `REG_EXTENDED` exist; Monocypher's public surface has no such thing.
+//
+// **An empty message is a real input to every function here** -- BLAKE2b of the empty string is a
+// published test vector, and sealing an empty plaintext under a key is an ordinary thing to do -- so
+// every slice reaches C through `sysl.slices.as_ptr`, which answers `null` for an empty one rather
+// than trapping the way `&b[0]` would. This file used to carry its own version of that function,
+// handing back a scratch byte instead of `null`; the library's is the better answer here for a reason
+// specific to Monocypher, and worth stating because it does not generalise. **`as_ptr`'s one
+// documented cost is that ISO C leaves `memcpy(dst, NULL, 0)` undefined -- and Monocypher calls
+// `memcpy` nowhere at all.** It copies with explicit loops, deliberately, so that it needs no C
+// library; a length of zero is a loop that does not run, and there is no libc function to hand a null
+// to. A binding whose C does use `memcpy` has to think about this again.
 //
 // **This binding supplies no randomness, and that is Monocypher's design rather than an omission.**
 // Every secret below is an input. A caller generating a real key must bring 32 bytes from the
@@ -74,18 +86,6 @@ extern "crypto_verify64" c_verify64(a: *u8, b: *u8) -> int
 
 extern "crypto_wipe" c_wipe(secret: *u8, size: usize)
 
-// A pointer to the first byte, or to a byte of the caller's that nothing will read.
-//
-// **An empty message is a real input to every function here** -- BLAKE2b of the empty string is a
-// published test vector, and sealing an empty plaintext under a key is an ordinary thing to do -- and
-// `&b[0]` on an empty slice is an out-of-bounds index, so it traps rather than yielding the null
-// pointer C would accept. The scratch byte belongs to the caller's frame and is passed in rather than
-// made here, so nothing returns a pointer into a frame that has gone.
-//
-// C never dereferences it: every call below passes the real length beside the pointer, and a length
-// of zero is a loop that does not run.
-private first(b: []const u8, scratch: *u8) -> *u8 = if b.len == 0 then scratch else &b[0]
-
 // BLAKE2b, into a digest buffer whose length chooses the digest size.
 //
 // The size is the buffer's rather than a parameter because those are the same number, and a function
@@ -94,9 +94,7 @@ private first(b: []const u8, scratch: *u8) -> *u8 = if b.len == 0 then scratch e
 blake2b(hash: []u8, message: []const u8)
     require hash.len >= 1 && hash.len <= max_hash_size, "a digest is 1 to 64 bytes"
 
-    var scratch: [1]u8
-
-    c_blake2b(&hash[0], hash.len, first(message, &scratch[0]), message.len)
+    c_blake2b(&hash[0], hash.len, as_ptr(message), message.len)
 end blake2b
 
 // BLAKE2b with a key, which is how it is used as a MAC.
@@ -107,10 +105,8 @@ blake2b_keyed(hash: []u8, key: []const u8, message: []const u8)
     require hash.len >= 1 && hash.len <= max_hash_size, "a digest is 1 to 64 bytes"
     require key.len <= max_hash_size, "a BLAKE2b key is at most 64 bytes"
 
-    var scratch: [1]u8
-
-    c_blake2b_keyed(&hash[0], hash.len, first(key, &scratch[0]), key.len,
-                    first(message, &scratch[0]), message.len)
+    c_blake2b_keyed(&hash[0], hash.len, as_ptr(key), key.len,
+                    as_ptr(message), message.len)
 end blake2b_keyed
 
 // Encrypt and authenticate, with XChaCha20-Poly1305.
@@ -130,10 +126,8 @@ lock(cipher: []u8, mac: []u8, key: []const u8, nonce: []const u8, ad: []const u8
     require mac.len == mac_size, "a Poly1305 tag is 16 bytes"
     require cipher.len == plain.len, "the ciphertext is exactly as long as the plaintext"
 
-    var scratch: [1]u8
-
-    c_aead_lock(first(cipher, &scratch[0]), &mac[0], &key[0], &nonce[0],
-                first(ad, &scratch[0]), ad.len, first(plain, &scratch[0]), plain.len)
+    c_aead_lock(as_mut_ptr(cipher), &mac[0], &key[0], &nonce[0],
+                as_ptr(ad), ad.len, as_ptr(plain), plain.len)
 end lock
 
 // Verify and decrypt. `false` means the message is not the one that was sealed -- a wrong key, a
@@ -150,10 +144,8 @@ unlock(plain: []u8, mac: []const u8, key: []const u8, nonce: []const u8, ad: []c
     require mac.len == mac_size, "a Poly1305 tag is 16 bytes"
     require plain.len == cipher.len, "the plaintext is exactly as long as the ciphertext"
 
-    var scratch: [1]u8
-
-    c_aead_unlock(first(plain, &scratch[0]), &mac[0], &key[0], &nonce[0],
-                  first(ad, &scratch[0]), ad.len, first(cipher, &scratch[0]), cipher.len) == 0
+    c_aead_unlock(as_mut_ptr(plain), &mac[0], &key[0], &nonce[0],
+                  as_ptr(ad), ad.len, as_ptr(cipher), cipher.len) == 0
 end unlock
 
 // The X25519 public key that goes with a secret key, for key exchange.
@@ -213,9 +205,7 @@ eddsa_sign(signature: []u8, secret_key: []const u8, message: []const u8)
     require signature.len == signature_size, "an EdDSA signature is 64 bytes"
     require secret_key.len == secret_key_size, "an EdDSA secret key is 64 bytes"
 
-    var scratch: [1]u8
-
-    c_eddsa_sign(&signature[0], &secret_key[0], first(message, &scratch[0]), message.len)
+    c_eddsa_sign(&signature[0], &secret_key[0], as_ptr(message), message.len)
 end eddsa_sign
 
 // Whether an EdDSA-BLAKE2b signature is the one that key made over that message.
@@ -223,9 +213,7 @@ eddsa_check(signature: []const u8, public_key: []const u8, message: []const u8) 
     require signature.len == signature_size, "an EdDSA signature is 64 bytes"
     require public_key.len == public_key_size, "an EdDSA public key is 32 bytes"
 
-    var scratch: [1]u8
-
-    c_eddsa_check(&signature[0], &public_key[0], first(message, &scratch[0]), message.len) == 0
+    c_eddsa_check(&signature[0], &public_key[0], as_ptr(message), message.len) == 0
 end eddsa_check
 
 // An Ed25519 signing key pair, derived from a 32-byte seed. The seed is wiped, as above.
@@ -246,9 +234,7 @@ ed25519_sign(signature: []u8, secret_key: []const u8, message: []const u8)
     require signature.len == signature_size, "an Ed25519 signature is 64 bytes"
     require secret_key.len == secret_key_size, "an Ed25519 secret key is 64 bytes"
 
-    var scratch: [1]u8
-
-    c_ed25519_sign(&signature[0], &secret_key[0], first(message, &scratch[0]), message.len)
+    c_ed25519_sign(&signature[0], &secret_key[0], as_ptr(message), message.len)
 end ed25519_sign
 
 // Whether an Ed25519 signature is the one that key made over that message.
@@ -256,9 +242,7 @@ ed25519_check(signature: []const u8, public_key: []const u8, message: []const u8
     require signature.len == signature_size, "an Ed25519 signature is 64 bytes"
     require public_key.len == public_key_size, "an Ed25519 public key is 32 bytes"
 
-    var scratch: [1]u8
-
-    c_ed25519_check(&signature[0], &public_key[0], first(message, &scratch[0]), message.len) == 0
+    c_ed25519_check(&signature[0], &public_key[0], as_ptr(message), message.len) == 0
 end ed25519_check
 
 // SHA-512, into a 64-byte buffer.
@@ -270,9 +254,7 @@ end ed25519_check
 sha512(hash: []u8, message: []const u8)
     require hash.len == sha512_size, "a SHA-512 digest is 64 bytes"
 
-    var scratch: [1]u8
-
-    c_sha512(&hash[0], first(message, &scratch[0]), message.len)
+    c_sha512(&hash[0], as_ptr(message), message.len)
 end sha512
 
 // Whether two secrets are equal, in time that does not depend on where they differ.
