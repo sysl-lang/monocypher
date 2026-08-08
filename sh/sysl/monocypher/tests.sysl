@@ -22,7 +22,7 @@ private unhex(s: string) -> []u8
     require s.bytes.len % 2 == 0, "a hexadecimal byte string has an even number of digits"
 
     val b = s.bytes
-    var out: []u8 = [0u8; b.len / 2]
+    var out: []u8 = [0; b.len / 2]
 
     for i in 0..<out.len do out[i] = nib(b[i * 2]) * 16 + nib(b[i * 2 + 1])
 
@@ -33,7 +33,7 @@ end unhex
 
 @test
 blake2b_matches_rfc_7693() =
-    var d: []u8 = [0u8; 64]
+    var d: []u8 = [0; 64]
 
     blake2b(d, "abc".bytes)
     assert(hex(d) == "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d1" +
@@ -50,8 +50,8 @@ blake2b_matches_rfc_7693() =
 // because the length goes into the initialization.
 @test
 blake2b_sizes_the_digest_from_the_buffer() =
-    var short: []u8 = [0u8; 32]
-    var full: []u8 = [0u8; 64]
+    var short: []u8 = [0; 32]
+    var full: []u8 = [0; 64]
 
     blake2b(short, "abc".bytes)
     blake2b(full, "abc".bytes)
@@ -62,7 +62,7 @@ blake2b_sizes_the_digest_from_the_buffer() =
 
 @test
 blake2b_takes_a_key() =
-    var d: []u8 = [0u8; 64]
+    var d: []u8 = [0; 64]
     val key = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
                     "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")
 
@@ -75,8 +75,8 @@ blake2b_takes_a_key() =
 // This is what pins the scratch-pointer path in `first`.
 @test
 an_empty_slice_does_not_trap() =
-    var d: []u8 = [0u8; 32]
-    val nothing: []u8 = [0u8; 0]
+    var d: []u8 = [0; 32]
+    val nothing: []u8 = [0; 0]
 
     blake2b(d, nothing)
     assert(hex(d) == "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8",
@@ -86,7 +86,7 @@ an_empty_slice_does_not_trap() =
 
 @test
 sha512_matches_fips_180_4() =
-    var d: []u8 = [0u8; 64]
+    var d: []u8 = [0; 64]
 
     sha512(d, "abc".bytes)
     assert(hex(d) == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a" +
@@ -105,8 +105,8 @@ x25519_matches_rfc_7748() =
     val alice_secret = unhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
     val bob_secret = unhex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
 
-    var alice_public: []u8 = [0u8; 32]
-    var bob_public: []u8 = [0u8; 32]
+    var alice_public: []u8 = [0; 32]
+    var bob_public: []u8 = [0; 32]
 
     x25519_public_key(alice_public, alice_secret)
     x25519_public_key(bob_public, bob_secret)
@@ -116,8 +116,8 @@ x25519_matches_rfc_7748() =
     assert(hex(bob_public) == "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
            "bob's public key")
 
-    var from_alice: []u8 = [0u8; 32]
-    var from_bob: []u8 = [0u8; 32]
+    var from_alice: []u8 = [0; 32]
+    var from_bob: []u8 = [0; 32]
 
     x25519(from_alice, alice_secret, bob_public)
     x25519(from_bob, bob_secret, alice_public)
@@ -132,15 +132,15 @@ x25519_matches_rfc_7748() =
 @test
 ed25519_matches_rfc_8032() =
     var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
-    var secret: []u8 = [0u8; 64]
-    var public: []u8 = [0u8; 32]
+    var secret: []u8 = [0; 64]
+    var public: []u8 = [0; 32]
 
     ed25519_key_pair(secret, public, seed)
 
     assert(hex(public) == "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
            "TEST 1's public key")
 
-    var sig: []u8 = [0u8; 64]
+    var sig: []u8 = [0; 64]
 
     ed25519_sign(sig, secret, "".bytes)
     assert(hex(sig) == "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155" +
@@ -154,8 +154,8 @@ ed25519_matches_rfc_8032() =
 @test
 ed25519_key_pair_wipes_the_seed() =
     var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
-    var secret: []u8 = [0u8; 64]
-    var public: []u8 = [0u8; 32]
+    var secret: []u8 = [0; 64]
+    var public: []u8 = [0; 32]
 
     ed25519_key_pair(secret, public, seed)
 
@@ -165,12 +165,12 @@ ed25519_key_pair_wipes_the_seed() =
 @test
 ed25519_rejects_an_altered_signature() =
     var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
-    var secret: []u8 = [0u8; 64]
-    var public: []u8 = [0u8; 32]
+    var secret: []u8 = [0; 64]
+    var public: []u8 = [0; 32]
 
     ed25519_key_pair(secret, public, seed)
 
-    var sig: []u8 = [0u8; 64]
+    var sig: []u8 = [0; 64]
 
     ed25519_sign(sig, secret, "attack at dawn".bytes)
     assert(ed25519_check(sig, public, "attack at dawn".bytes), "the signature it made")
@@ -187,16 +187,16 @@ eddsa_and_ed25519_are_different_schemes() =
     var seed_a = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
     var seed_b = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
 
-    var ed_secret: []u8 = [0u8; 64]
-    var ed_public: []u8 = [0u8; 32]
-    var bl_secret: []u8 = [0u8; 64]
-    var bl_public: []u8 = [0u8; 32]
+    var ed_secret: []u8 = [0; 64]
+    var ed_public: []u8 = [0; 32]
+    var bl_secret: []u8 = [0; 64]
+    var bl_public: []u8 = [0; 32]
 
     ed25519_key_pair(ed_secret, ed_public, seed_a)
     eddsa_key_pair(bl_secret, bl_public, seed_b)
 
-    var ed_sig: []u8 = [0u8; 64]
-    var bl_sig: []u8 = [0u8; 64]
+    var ed_sig: []u8 = [0; 64]
+    var bl_sig: []u8 = [0; 64]
 
     ed25519_sign(ed_sig, ed_secret, "hello".bytes)
     eddsa_sign(bl_sig, bl_secret, "hello".bytes)
@@ -208,12 +208,12 @@ eddsa_and_ed25519_are_different_schemes() =
 @test
 eddsa_verifies_its_own() =
     var seed = unhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
-    var secret: []u8 = [0u8; 64]
-    var public: []u8 = [0u8; 32]
+    var secret: []u8 = [0; 64]
+    var public: []u8 = [0; 32]
 
     eddsa_key_pair(secret, public, seed)
 
-    var sig: []u8 = [0u8; 64]
+    var sig: []u8 = [0; 64]
 
     eddsa_sign(sig, secret, "hello".bytes)
     assert(eddsa_check(sig, public, "hello".bytes), "the signature it made")
@@ -231,14 +231,14 @@ aead_round_trips() =
     val message = "the quick brown fox".bytes
     val ad = "envelope".bytes
 
-    var cipher: []u8 = [0u8; 19]
-    var mac: []u8 = [0u8; 16]
+    var cipher: []u8 = [0; 19]
+    var mac: []u8 = [0; 16]
 
     lock(cipher, mac, test_key(), test_nonce(), ad, message)
 
     assert(hex(cipher) != hex(message), "the ciphertext is not the plaintext")
 
-    var back: []u8 = [0u8; 19]
+    var back: []u8 = [0; 19]
 
     assert(unlock(back, mac, test_key(), test_nonce(), ad, cipher), "it unlocks")
     assert(hex(back) == hex(message), "and the bytes are the ones that went in")
@@ -250,12 +250,12 @@ aead_rejects_what_was_altered() =
     val message = "the quick brown fox".bytes
     val ad = "envelope".bytes
 
-    var cipher: []u8 = [0u8; 19]
-    var mac: []u8 = [0u8; 16]
+    var cipher: []u8 = [0; 19]
+    var mac: []u8 = [0; 16]
 
     lock(cipher, mac, test_key(), test_nonce(), ad, message)
 
-    var back: []u8 = [0u8; 19]
+    var back: []u8 = [0; 19]
 
     var wrong_key = test_key()
 
@@ -277,14 +277,14 @@ aead_rejects_what_was_altered() =
 
 @test
 aead_seals_an_empty_message() =
-    val nothing: []u8 = [0u8; 0]
+    val nothing: []u8 = [0; 0]
 
-    var cipher: []u8 = [0u8; 0]
-    var mac: []u8 = [0u8; 16]
+    var cipher: []u8 = [0; 0]
+    var mac: []u8 = [0; 16]
 
     lock(cipher, mac, test_key(), test_nonce(), nothing, nothing)
 
-    var back: []u8 = [0u8; 0]
+    var back: []u8 = [0; 0]
 
     assert(unlock(back, mac, test_key(), test_nonce(), nothing, cipher),
            "an empty message still carries a tag that verifies")
@@ -318,7 +318,7 @@ wipe_zeroes_a_buffer() =
 // Wiping nothing is not an error, and it is the case that would index an empty slice.
 @test
 wipe_accepts_an_empty_buffer() =
-    var nothing: []u8 = [0u8; 0]
+    var nothing: []u8 = [0; 0]
 
     wipe(nothing)
     assert(hex(nothing) == "", "there was nothing to wipe")
@@ -331,54 +331,54 @@ wipe_accepts_an_empty_buffer() =
 
 @test(should_trap)
 a_short_aead_key_is_refused() =
-    var cipher: []u8 = [0u8; 4]
-    var mac: []u8 = [0u8; 16]
+    var cipher: []u8 = [0; 4]
+    var mac: []u8 = [0; 16]
 
     lock(cipher, mac, unhex("0001020304050607"), test_nonce(), "".bytes, "abcd".bytes)
 
 @test(should_trap)
 a_short_nonce_is_refused() =
-    var cipher: []u8 = [0u8; 4]
-    var mac: []u8 = [0u8; 16]
+    var cipher: []u8 = [0; 4]
+    var mac: []u8 = [0; 16]
 
     lock(cipher, mac, test_key(), unhex("000102030405060708090a0b"), "".bytes, "abcd".bytes)
 
 @test(should_trap)
 a_ciphertext_of_the_wrong_length_is_refused() =
-    var cipher: []u8 = [0u8; 8]
-    var mac: []u8 = [0u8; 16]
+    var cipher: []u8 = [0; 8]
+    var mac: []u8 = [0; 16]
 
     lock(cipher, mac, test_key(), test_nonce(), "".bytes, "abcd".bytes)
 
 @test(should_trap)
 a_digest_buffer_longer_than_64_bytes_is_refused() =
-    var d: []u8 = [0u8; 65]
+    var d: []u8 = [0; 65]
 
     blake2b(d, "abc".bytes)
 
 @test(should_trap)
 an_empty_digest_buffer_is_refused() =
-    var d: []u8 = [0u8; 0]
+    var d: []u8 = [0; 0]
 
     blake2b(d, "abc".bytes)
 
 @test(should_trap)
 a_blake2b_key_longer_than_64_bytes_is_refused() =
-    var d: []u8 = [0u8; 32]
-    var key: []u8 = [0u8; 65]
+    var d: []u8 = [0; 32]
+    var key: []u8 = [0; 65]
 
     blake2b_keyed(d, key, "abc".bytes)
 
 @test(should_trap)
 a_short_x25519_secret_key_is_refused() =
-    var public: []u8 = [0u8; 32]
+    var public: []u8 = [0; 32]
 
     x25519_public_key(public, unhex("0001020304050607"))
 
 @test(should_trap)
 an_ed25519_signature_buffer_of_the_wrong_size_is_refused() =
-    var sig: []u8 = [0u8; 32]
-    var secret: []u8 = [0u8; 64]
+    var sig: []u8 = [0; 32]
+    var secret: []u8 = [0; 64]
 
     ed25519_sign(sig, secret, "abc".bytes)
 

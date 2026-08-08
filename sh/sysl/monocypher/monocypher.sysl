@@ -305,4 +305,4 @@ hex(bytes: []const u8) -> string
     b.finish()
 end hex
 
-private hex_digit(v: u8) -> char = if v < 10 then char(48u32 + u32(v)) else char(87u32 + u32(v))
+private hex_digit(v: u8) -> char = if v < 10 then char(48 + u32(v)) else char(87 + u32(v))

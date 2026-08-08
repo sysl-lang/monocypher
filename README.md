@@ -34,12 +34,12 @@ Name it in your project's `package.hocon` and `sysl build` fetches it:
 
 ```hocon
 dependencies {
-  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.2.1" }
+  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.2.2" }
 }
 ```
 
 The coordinate is an identity rather than a URL, so it carries no `https://`, and `version` is the
-tag `v0.2.1` here. Resolution clones it, selects versions by MVS, and records what arrived in
+tag `v0.2.2` here. Resolution clones it, selects versions by MVS, and records what arrived in
 `sysl.sum`.
 
 Or build it into an artifact and compile against that, which needs no fetching and is what this
@@ -67,12 +67,12 @@ val nonce = your_random_bytes(24)
 val message = "attack at dawn".bytes
 val ad = "message 41".bytes
 
-var cipher: []u8 = [0u8; 14]
-var mac: []u8 = [0u8; 16]
+var cipher: []u8 = [0; 14]
+var mac: []u8 = [0; 16]
 
 lock(cipher, mac, key, nonce, ad, message)
 
-var back: []u8 = [0u8; 14]
+var back: []u8 = [0; 14]
 
 if unlock(back, mac, key, nonce, ad, cipher) then
     print(f"recovered: ${back}")
