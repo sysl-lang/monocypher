@@ -17,14 +17,33 @@ require and this builds for a freestanding target as readily as for a host.
 sh/sysl/monocypher/
     monocypher.sysl         the binding
     tests.sysl              the published test vectors
-    monocypher.c            vendored from LoupVaillant/Monocypher 4.0.3
-    monocypher.h
-    monocypher-ed25519.c    the optional module: SHA-512 and RFC 8032 Ed25519
-    monocypher-ed25519.h
+    c/
+        c.sysl              Monocypher as C declares it
+        monocypher.c        vendored from LoupVaillant/Monocypher 4.0.3
+        monocypher.h
+        monocypher-ed25519.c    the optional module: SHA-512 and RFC 8032 Ed25519
+        monocypher-ed25519.h
 package.hocon               who this package is, and what it needs of the machine
 ```
 
-The module is **`sh.sysl.monocypher`**, and the three directories are that name: a dotted module name
+**Everything that is C lives in `c/`**, module `sh.sysl.monocypher.c`. That is the two-layer shape every
+binding in this organisation uses, and it earns its keep here more than most: the `c` layer has to be
+*faithful*, and for a cryptographic library a signature that disagrees with the header links perfectly
+and then reads past the end of a key. The layer above it has to be *pleasant*, which is a different
+question and would otherwise be answered in the same breath.
+
+**A fixed-size array parameter is why the two layers are not the same thing.** C writes
+`const uint8_t key[32]`, which is a pointer with a comment — the compiler checks nothing about it. The
+`c` layer declares it as the pointer it is; `monocypher.sysl` takes a slice and `require`s its length
+against a `const`, which is the only place the 32 is enforced rather than described.
+
+**There is no `c const` block, and that is a finding rather than an omission.** `monocypher.h` defines
+no size macros: the numbers live in those array parameters, and the only `#define`s in either header are
+Argon2's three variants, which this binding does not bind. So the sizes come from the algorithms' own
+specifications — an X25519 key is 32 bytes because Curve25519 is a 255-bit curve — and asking the C
+compiler is not available. Where a header *does* define a constant, asking for it is the rule.
+
+The module is **`sh.sysl.monocypher`**, and the directories are that name: a dotted module name
 mirrors its path from the library root. The prefix is the reverse-DNS of `sysl.sh`, so that a package
 claims a name nobody else will mint rather than the top-level word `monocypher`.
 
@@ -34,12 +53,12 @@ Name it in your project's `package.hocon` and `sysl build` fetches it:
 
 ```hocon
 dependencies {
-  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.2.2" }
+  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.3.0" }
 }
 ```
 
 The coordinate is an identity rather than a URL, so it carries no `https://`, and `version` is the
-tag `v0.2.2` here. Resolution clones it, selects versions by MVS, and records what arrived in
+tag `v0.3.0` here. Resolution clones it, selects versions by MVS, and records what arrived in
 `sysl.sum`.
 
 Or build it into an artifact and compile against that, which needs no fetching and is what this
@@ -164,9 +183,19 @@ files, so `sysl test .` on this repository linked against nothing and failed nam
 ### Not bound
 
 The incremental interfaces (`crypto_blake2b_init` / `_update` / `_final`, and the AEAD's
-`crypto_aead_init_*` / `_write` / `_read`) are absent. They need `crypto_blake2b_ctx` and
-`crypto_aead_ctx` laid out rather than kept opaque, which is a shim and a size the header owns —
-worth doing when something needs to hash a stream it cannot hold in memory.
+`crypto_aead_init_*` / `_write` / `_read`) are absent, and **the reason written here has expired.** It
+said they needed a shim, because the caller has to allocate a `crypto_blake2b_ctx` or a
+`crypto_aead_ctx` and only the header knows how large one is. That was true while nothing but C could
+read a `sizeof`, and `c const` now can:
+
+```sysl
+c const
+    BLAKE2B_CTX_SIZE: usize = "sizeof(crypto_blake2b_ctx)"
+```
+
+So what these actually need is an `opaque struct` over storage the caller supplies — the same shape
+`regex` uses for `regex_t` — and no C of our own at all. Still worth doing when something has to hash a
+stream it cannot hold in memory, and cheaper than this note claimed.
 
 **Argon2** is absent too. It is the password-hashing function and it wants a large caller-allocated
 work area, which is a question about allocation policy rather than about cryptography; it deserves
@@ -179,7 +208,9 @@ Vendored from [LoupVaillant/Monocypher](https://github.com/LoupVaillant/Monocyph
 from the tarball whose SHA-256 is `8cc9bc341a66249016db9bd70e9142d8d0aef9945973744b1ac05dbc55d8ee66`
 — the digest GitHub publishes for that asset, checked before the files were copied.
 
-Monocypher is dual-licensed BSD-2 / CC-0; see `LICENSE`, which carries the notice as redistribution
+The binding is ISC; Monocypher is dual-licensed BSD-2 / CC-0. See `LICENSE`, which carries both and
+which now says which files each set of terms covers — it carried only Monocypher's until the package
+took the two-layer shape, so the binding's own sysl had no stated licence at all. Redistribution
 requires.
 
 **Vendoring means upstream fixes do not arrive on their own, and for a cryptographic library that is

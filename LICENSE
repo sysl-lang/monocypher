@@ -1,3 +1,12 @@
+This package contains two things under two sets of terms.
+
+================================================================================
+sh/sysl/monocypher/c/monocypher.c, monocypher.h, monocypher-ed25519.c and
+monocypher-ed25519.h — vendored, dual-licensed BSD-2 / CC-0
+================================================================================
+
+The text below is Monocypher's own, carried verbatim as redistribution requires.
+
 Monocypher as a whole is dual-licensed.  Choose whichever licence you
 want from the two licences listed below.
 
@@ -165,3 +174,22 @@ rights.
    - Affirmer understands and acknowledges that Creative Commons is not
      a party to this document and has no duty or obligation with respect
      to this CC0 or use of the Work.
+
+================================================================================
+sh/sysl/monocypher/monocypher.sysl, tests.sysl, c/c.sysl and everything else
+here — ISC
+================================================================================
+
+Copyright (c) 2026 Edward A. Maxedon, Sr.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
