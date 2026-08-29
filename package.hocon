@@ -8,11 +8,11 @@
 // arrived against `sysl.sum`, and compiles it as more modules.
 //
 //     dependencies {
-//       monocypher { git = "github.com/sysl-lang/monocypher", version = "0.3.0" }
+//       monocypher { git = "github.com/sysl-lang/monocypher", version = "0.4.0" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.3.0` on this repository. `build-lib` and `--lib` still work and are what the tests here
+// tag `v0.4.0` on this repository. `build-lib` and `--lib` still work and are what the tests here
 // use, but they are no longer the only way in.
 
 // `name` is the package; the module a program imports is `sh.sysl.monocypher`, and the two are
@@ -22,7 +22,13 @@
 
 package {
   name    = "monocypher"
-  version = "0.3.0"
+  version = "0.4.0"
+
+  // The compiler this was written against and the only one it is known to build with. There was no
+  // floor here at all until 0.4.0, which was fine while the package used nothing newer than externs
+  // over pointers; Argon2 brought a `c const` block and `sysl.encoding.base64` with it. Lower it when
+  // somebody builds this with an older one — a floor is meant to be a fact rather than a guess.
+  sysl = "0.0.90"
 }
 
 // **There is deliberately no `requires` block, and that is the point of this package.**

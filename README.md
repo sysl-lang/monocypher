@@ -37,11 +37,12 @@ question and would otherwise be answered in the same breath.
 `c` layer declares it as the pointer it is; `monocypher.sysl` takes a slice and `require`s its length
 against a `const`, which is the only place the 32 is enforced rather than described.
 
-**There is no `c const` block, and that is a finding rather than an omission.** `monocypher.h` defines
-no size macros: the numbers live in those array parameters, and the only `#define`s in either header are
-Argon2's three variants, which this binding does not bind. So the sizes come from the algorithms' own
+**The sizes are not asked for, and that is a finding rather than an omission.** `monocypher.h` defines
+no size macros: the numbers live in those array parameters. So the sizes come from the algorithms' own
 specifications — an X25519 key is 32 bytes because Curve25519 is a 255-bit curve — and asking the C
-compiler is not available. Where a header *does* define a constant, asking for it is the rule.
+compiler is not available. Where a header *does* define a constant, asking for it is the rule, which is
+why the `c const` block that exists holds Argon2's three variant numbers and the three `sizeof`s of its
+structs, and nothing else. This paragraph read "there is no `c const` block" until Argon2 was bound.
 
 The module is **`sh.sysl.monocypher`**, and the directories are that name: a dotted module name
 mirrors its path from the library root. The prefix is the reverse-DNS of `sysl.sh`, so that a package
@@ -53,12 +54,12 @@ Name it in your project's `package.hocon` and `sysl build` fetches it:
 
 ```hocon
 dependencies {
-  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.3.0" }
+  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.4.0" }
 }
 ```
 
 The coordinate is an identity rather than a URL, so it carries no `https://`, and `version` is the
-tag `v0.3.0` here. Resolution clones it, selects versions by MVS, and records what arrived in
+tag `v0.4.0` here. Resolution clones it, selects versions by MVS, and records what arrived in
 `sysl.sum`.
 
 Or build it into an artifact and compile against that, which needs no fetching and is what this
@@ -145,6 +146,11 @@ predictable is not a key**, and no test in this repository can tell you that you
 | `equal(a, b) -> bool` | constant-time comparison, at 16, 32 or 64 bytes |
 | `wipe(secret)` | zero a buffer, in a way the optimizer may not delete |
 | `hex(bytes) -> string` | lowercase hexadecimal; not cryptography, but everything prints |
+| `argon2(hash, work_area, password, salt, params, key, ad)` | Argon2d/i/id — **the password hash** |
+| `hash_password(work_area, password, salt, params) -> string` | the PHC record to store |
+| `check_password(work_area, record, password) -> Result[bool, PhcError]` | and to check it |
+| `needs_rehash(record, want) -> Result[bool, PhcError]` | whether to raise the parameters |
+| `work_area_size(params)` / `work_area_needed(record)` | how much memory it will want |
 
 Sizes are checked by contract, so a 31-byte key stops here rather than reaching C and reading a byte
 past the end of your buffer.
@@ -197,10 +203,83 @@ So what these actually need is an `opaque struct` over storage the caller suppli
 `regex` uses for `regex_t` — and no C of our own at all. Still worth doing when something has to hash a
 stream it cannot hold in memory, and cheaper than this note claimed.
 
-**Argon2** is absent too. It is the password-hashing function and it wants a large caller-allocated
-work area, which is a question about allocation policy rather than about cryptography; it deserves
-its own decision. Also absent: Elligator, the raw ChaCha20 and Poly1305 primitives, and the low-level
-EdDSA scalar operations, all of which are for building constructions rather than using them.
+**Argon2 was absent for the same kind of reason and is now bound** — see its own section below. What
+this note said was that its large caller-allocated work area is "a question about allocation policy
+rather than about cryptography", and the answer turned out to be the one this package already gives
+everywhere else: the caller supplies the storage, so nothing is allocated and `requires {}` stands.
+
+Also absent: Elligator, the raw ChaCha20 and Poly1305 primitives, and the low-level EdDSA scalar
+operations, all of which are for building constructions rather than using them.
+
+## Argon2 — the password hash
+
+**A digest is not a password hash**, and the distinction is the whole reason this is here. `blake2b`
+and `sha512` are fast, which is right for a message and catastrophic for a password: a stolen table of
+SHA-512 hashes is tried at billions of guesses a second on a graphics card. Argon2 is deliberately
+slow *and* deliberately memory-hungry, so a card's thousands of cores cannot each hold the state.
+
+```sysl
+val params = interactive()                        // OWASP: Argon2id, 19 MiB, t=2, p=1
+var area: []u8 = [0; work_area_size(params)]
+
+val record = hash_password(area, password, salt, params)
+```
+
+and later, against that string and nothing else:
+
+```sysl
+if check_password(area, record, attempt)? then …
+```
+
+**The parameters travel inside the record**, in the PHC format every other implementation reads:
+
+```
+$argon2id$v=19$m=19456,t=2,p=1$AgICAgICAgICAgICAgICAg$N/UxXD8kZoE72Cqc…
+```
+
+That is what lets them be raised later without invalidating a single existing password —
+`check_password` uses the parameters the record was *made* with, and `needs_rehash` says whether they
+are below what you now want. Raise them on a successful login, when the plaintext is in hand.
+
+**The salt is yours to supply**, as all randomness here is: this package has no operating system to
+ask. Sixteen bytes from the system's random source, different for every password. A constant salt
+makes one precomputed table break every account at once.
+
+**`Ok(false)` is a wrong password; `Err` is a question that could not be asked** — a malformed record,
+an unknown algorithm, a work area smaller than the record's parameters need (which carries the size,
+so ask `work_area_needed` first). Collapsing the two would make a corrupted database row read as an
+intruder.
+
+**Nothing is allocated by the algorithm.** `work_area` is yours and is scribbled over; `argon2` is the
+primitive and takes no `Buf` and no allocator. `hash_password` and `encode` build a `string` and are
+the only allocating functions here, as `hex` already was.
+
+### Checked against three implementations, and two formats
+
+RFC 9106 §5 gives **one set of inputs and three tags** — 32 bytes of `01`, 16 of `02`, an 8-byte
+secret, 12 bytes of associated data, at 32 KiB, three passes and four lanes. So the same call must
+produce three different answers as the algorithm number changes, which a binding that ignored the
+field, or that shifted the three constants by one, cannot fake. Monocypher matches all three, and so
+does Node's `crypto.argon2Sync`, checked independently.
+
+The four lanes matter on their own: Monocypher's header calls itself single-threaded, and the vectors
+prove it computes the four-lane answer anyway rather than quietly doing one.
+
+**The PHC format is checked against the Rust `argon2` crate**, a from-scratch implementation that
+writes the string itself. Records it wrote verify here, and records written here are byte-identical to
+its own — which is the claim that matters, since a record a sysl service stores is worthless if
+nothing else can read it. The format's one trap is that its base64 is **unpadded**, and that is what an
+implementation written from an example gets wrong.
+
+Every one of these was shown able to fail: swapping the three variant constants, dropping the key from
+the extras, padding the base64, and using current parameters instead of the record's each redden
+exactly the tests that claim those things.
+
+**AddressSanitizer has teeth here**, because the C is vendored rather than a system library:
+`SYSL_EXTRA_CFLAGS="-fsanitize=address -g" sysl test .` is clean, and calling the `c` layer directly
+with a work area one block short reports `heap-buffer-overflow monocypher.c:890 in crypto_argon2`. That
+overflow is what the `require` in `argon2` exists to prevent — Monocypher trusts the size completely,
+because a pointer carries no length.
 
 ## Upstream
 

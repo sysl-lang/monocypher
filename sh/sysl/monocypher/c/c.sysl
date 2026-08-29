@@ -18,19 +18,23 @@
 // compiler checks nothing about it, and neither can sysl. The lengths are `require`d one level up,
 // against the `const`s declared there.
 //
-// ==There is no shim, and no `c const` — and the second one is a finding rather than an omission==
+// ==There is no shim, and the `c const` block is Argon2's alone==
 //
-// No shim, because every entry point takes scalars and pointers: Monocypher is written to need no
-// allocator, no operating system and no C library, and it publishes nothing whose layout has to be
-// hidden from a caller using the one-shot functions.
+// No shim, because every entry point takes scalars, pointers and small structs: Monocypher is written
+// to need no allocator, no operating system and no C library, and it publishes nothing whose layout
+// has to be hidden from a caller using the one-shot functions.
 //
-// **No `c const`, because `monocypher.h` does not define the sizes.** They are written into the array
-// parameters — `key[32]`, `signature[64]` — where they are documentation to a reader and nothing at all
-// to the compiler. The only `#define`s in either header are Argon2's three variants, and this binding
-// does not bind Argon2. So there is nothing for the C compiler to be asked, and the sizes stay
-// `const`s in the module above, taken from the algorithms' own specifications: X25519 keys are 32 bytes
-// because Curve25519 is a 255-bit curve, not because a header says so. That is the same case as
-// st7796's datasheet command bytes, and the opposite of qcbor's or termbox2's `#define`s.
+// **The sizes are not asked for, because `monocypher.h` does not define them.** They are written into
+// the array parameters — `key[32]`, `signature[64]` — where they are documentation to a reader and
+// nothing at all to the compiler. So the sizes stay `const`s in the module above, taken from the
+// algorithms' own specifications: X25519 keys are 32 bytes because Curve25519 is a 255-bit curve, not
+// because a header says so. That is the same case as st7796's datasheet command bytes, and the
+// opposite of qcbor's or termbox2's `#define`s.
+//
+// **This paragraph read "there is no `c const`" until Argon2 was bound.** The header's only `#define`s
+// are Argon2's three variant numbers, and while Argon2 was unbound there was nothing for the C
+// compiler to be asked — so the absence was a finding about the library rather than an omission. It is
+// still that; there is simply an Argon2 now, and its three constants are read rather than copied.
 
 module sh.sysl.monocypher.c
 
@@ -69,3 +73,53 @@ extern "crypto_verify32" verify32(a: *u8, b: *u8) -> int
 extern "crypto_verify64" verify64(a: *u8, b: *u8) -> int
 
 extern "crypto_wipe" wipe(secret: *u8, size: usize)
+
+// ## Argon2
+//
+// **Three structs crossing by value**, which is ordinary and is worth saying only because a comment in
+// this package once claimed the opposite: `qcbor.sysl` recorded that "a struct passed by value has no
+// sysl spelling", the org file quoted it as a language limit, and it was never true. The layouts here
+// are checked against C's own `sizeof` in the tests beside this file rather than trusted.
+//
+// The `algorithm` field takes one of the three constants below; every other field is a count.
+struct Argon2Config
+    algorithm: u32
+    nb_blocks: u32
+    nb_passes: u32
+    nb_lanes: u32
+
+// **A null `pass` or `salt` is not allowed** — Argon2 hashes both and neither may be absent, unlike
+// the two fields of `Argon2Extras`.
+struct Argon2Inputs
+    pass: *u8
+    salt: *u8
+    pass_size: u32
+    salt_size: u32
+
+// Both pointers may be null with their size zero, which is what `crypto_argon2_no_extras` is. That
+// variable is not bound: a zeroed value of this struct is the same thing and needs no symbol.
+struct Argon2Extras
+    key: *u8
+    ad: *u8
+    key_size: u32
+    ad_size: u32
+
+// `work_area` must be `nb_blocks * 1024` bytes and is scribbled over. Nothing is allocated: this is
+// the caller-supplied-storage shape, which is why the module above can still claim no capabilities.
+extern "crypto_argon2" argon2(hash: *u8, hash_size: u32, work_area: *u8,
+                              config: Argon2Config, inputs: Argon2Inputs, extras: Argon2Extras)
+
+// The header's only `#define`s, read rather than copied — which matters more than it looks, since the
+// three are 0, 1 and 2 and a transcription that shifted them by one would compute a real Argon2 of the
+// wrong variant and look entirely healthy.
+c const
+    ARGON2_D:  u32 = "CRYPTO_ARGON2_D"
+    ARGON2_I:  u32 = "CRYPTO_ARGON2_I"
+    ARGON2_ID: u32 = "CRYPTO_ARGON2_ID"
+
+// What C says these are, so that a Monocypher release which changed one fails a test rather than
+// corrupting a call.
+c const
+    CONFIG_SIZE: usize = "sizeof(crypto_argon2_config)"
+    INPUTS_SIZE: usize = "sizeof(crypto_argon2_inputs)"
+    EXTRAS_SIZE: usize = "sizeof(crypto_argon2_extras)"

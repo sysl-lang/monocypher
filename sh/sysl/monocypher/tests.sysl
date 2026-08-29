@@ -1,5 +1,8 @@
 module sh.sysl.monocypher
 
+import sh.sysl.monocypher.c
+import sysl.text.Search
+
 // The published test vectors, run by `sysl test .`.
 //
 // **Nothing here is checked against a value this binding produced.** Every expected string below is
@@ -395,3 +398,301 @@ equal_refuses_two_different_lengths() =
     val b = unhex("000102030405060708090a0b0c0d0e0f10")
 
     assert(equal(a, b), "a length mismatch is not an answer of false")
+
+// -- Argon2, RFC 9106 ------------------------------------------------------------------------------
+
+// **RFC 9106 §5 gives one set of inputs and three tags**, so the same password, salt, secret and
+// associated data must produce three different answers — which is a much stronger claim than three
+// separate vectors would be. A binding that ignored `algorithm` entirely, or that shifted the three
+// variant numbers by one, would compute a real Argon2 every time and fail exactly here.
+//
+// The inputs are the RFC's: 32 bytes of `01`, 16 of `02`, 8 of `03` and 12 of `04`, at 32 KiB, three
+// passes and **four lanes**. The lanes matter: Monocypher's header calls itself single-threaded, and
+// this is what proves it computes the four-lane answer anyway rather than quietly doing one.
+
+private rfc_9106_area() -> []u8 = [0; 32 * 1024]
+
+private rfc_9106_check(algorithm: Algorithm, want: string)
+    var tag: []u8 = [0; 32]
+    var area = rfc_9106_area()
+
+    argon2(tag, area, [1; 32], [2; 16], Params(algorithm, 32, 3, 4), [3; 8], [4; 12])
+
+    assert(hex(tag) == want, "RFC 9106's tag for this variant")
+end rfc_9106_check
+
+@test("RFC 9106's three tags, from one set of inputs and three algorithm numbers")
+argon2_matches_rfc_9106()
+    rfc_9106_check(D, "512b391b6f1162975371d30919734294f868e3be3984f3c1a13a4db9fabe4acb")
+    rfc_9106_check(I, "c814d9d1dc7f37aa13f0d77f2494bda1c8de6b016dd388d29952a4c4672b6ce8")
+    rfc_9106_check(Id, "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659")
+end argon2_matches_rfc_9106
+
+// The key and the associated data are optional, and a binding that dropped either would still match
+// nothing above — but would match *each other*, which is the coincidence worth ruling out.
+@test("the key and the associated data each change the answer")
+argon2_extras_are_not_ignored()
+    var area = rfc_9106_area()
+    val params = Params(Id, 32, 3, 4)
+
+    var plain: []u8 = [0; 32]
+    var keyed: []u8 = [0; 32]
+    var with_ad: []u8 = [0; 32]
+
+    argon2(plain, area, [1; 32], [2; 16], params)
+    argon2(keyed, area, [1; 32], [2; 16], params, [3; 8])
+    argon2(with_ad, area, [1; 32], [2; 16], params, [], [4; 12])
+
+    assert(hex(plain) != hex(keyed), "a key must change the tag")
+    assert(hex(plain) != hex(with_ad), "associated data must change the tag")
+    assert(hex(keyed) != hex(with_ad), "a key and associated data are different inputs")
+end argon2_extras_are_not_ignored
+
+// Each of the four parameters has to reach C. A wrong field order in the struct would compile, link
+// and produce a plausible hash, so the check is that moving each one alone moves the answer.
+@test("every parameter reaches the algorithm")
+argon2_parameters_all_bite()
+    var area: []u8 = [0; 64 * 1024]
+
+    var base: []u8 = [0; 32]
+    var more_memory: []u8 = [0; 32]
+    var more_passes: []u8 = [0; 32]
+    var more_lanes: []u8 = [0; 32]
+    var longer: []u8 = [0; 64]
+
+    argon2(base, area, "password".bytes, [2; 16], Params(Id, 32, 3, 1))
+    argon2(more_memory, area, "password".bytes, [2; 16], Params(Id, 64, 3, 1))
+    argon2(more_passes, area, "password".bytes, [2; 16], Params(Id, 32, 4, 1))
+    argon2(more_lanes, area, "password".bytes, [2; 16], Params(Id, 32, 3, 4))
+    argon2(longer, area, "password".bytes, [2; 16], Params(Id, 32, 3, 1))
+
+    assert(hex(base) != hex(more_memory))
+    assert(hex(base) != hex(more_passes))
+    assert(hex(base) != hex(more_lanes))
+
+    // A longer tag is not the shorter one with more on the end — Argon2 hashes the length in.
+    assert(hex(longer)[0..64] != hex(base), "the tag length is an input, not a truncation")
+end argon2_parameters_all_bite
+
+// The three structs cross by value, and C's own `sizeof` is what says the layouts agree. A Monocypher
+// release that added a field would fail here rather than corrupting a call.
+@test("the three Argon2 structs are the size C says they are")
+argon2_struct_layouts_agree()
+    assert_eq(sizeof(c.Argon2Config), c.CONFIG_SIZE)
+    assert_eq(sizeof(c.Argon2Inputs), c.INPUTS_SIZE)
+    assert_eq(sizeof(c.Argon2Extras), c.EXTRAS_SIZE)
+end argon2_struct_layouts_agree
+
+// -- The stored string -----------------------------------------------------------------------------
+
+// The format is somebody else's, so this is a fixed string rather than a round trip: a PHC record
+// written here has to be readable by the Python, Go and Rust implementations that already exist, and
+// the one thing an implementation written from an example gets wrong is the **unpadded** base64.
+@test("the encoded form is the PHC string other implementations read")
+phc_encoding_is_the_standard_one()
+    val salt: []u8 = [2; 16]
+    val hash: []u8 = [3; 32]
+
+    assert_eq(encode(Params(Id, 19456, 2, 1), salt, hash),
+        "$argon2id$v=19$m=19456,t=2,p=1$AgICAgICAgICAgICAgICAg$AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM")
+
+    // A 16-byte salt and a 32-byte hash are both cases where padded base64 would carry an '=' — 22
+    // and 43 characters, neither a multiple of four. The parameter field has '=' signs of its own,
+    // which is why this looks at the two base64 fields rather than at the whole string.
+    val written = encode(Params(Id, 19456, 2, 1), salt, hash)
+
+    assert(!written.contains("=$") && !written.ends_with("="),
+        "PHC base64 carries no padding, and a '=' would break every other implementation")
+
+    assert_eq(encode(Params(D, 8, 1, 1), salt, hash)[0..<9], "$argon2d$")
+    assert_eq(encode(Params(I, 8, 1, 1), salt, hash)[0..<9], "$argon2i$")
+end phc_encoding_is_the_standard_one
+
+@test("what encode writes, parse reads back")
+phc_round_trips()
+    val salt: []u8 = [7; 16]
+    val hash: []u8 = [9; 32]
+    val params = Params(Id, 4096, 3, 2)
+
+    var back = parse(encode(params, salt, hash)).unwrap()
+
+    assert_eq(back.params.blocks, 4096)
+    assert_eq(back.params.passes, 3)
+    assert_eq(back.params.lanes, 2)
+    assert(back.params.algorithm == Algorithm.Id)
+    assert_eq(back.salt(), salt)
+    assert_eq(back.hash(), hash)
+end phc_round_trips
+
+@test("a password checks against its own record and nothing else's")
+check_password_accepts_and_refuses()
+    val params = Params(Id, 32, 3, 1)
+    var area: []u8 = [0; 32 * 1024]
+
+    val stored = hash_password(area, "correct horse".bytes, [5; 16], params)
+
+    assert(check_password(area, stored, "correct horse".bytes).unwrap())
+    assert(!check_password(area, stored, "correct horsf".bytes).unwrap())
+    assert(!check_password(area, stored, "".bytes).unwrap())
+    assert(!check_password(area, stored, "correct hors".bytes).unwrap())
+end check_password_accepts_and_refuses
+
+// A pepper the database does not hold is the point of `key`: a stolen table without it verifies
+// nothing at all.
+@test("a record made with a key does not check without it")
+check_password_honours_the_key()
+    var area: []u8 = [0; 32 * 1024]
+    val params = Params(Id, 32, 3, 1)
+
+    val stored = hash_password(area, "hunter2".bytes, [5; 16], params, "pepper".bytes)
+
+    assert(check_password(area, stored, "hunter2".bytes, "pepper".bytes).unwrap())
+    assert(!check_password(area, stored, "hunter2".bytes).unwrap())
+    assert(!check_password(area, stored, "hunter2".bytes, "peppes".bytes).unwrap())
+end check_password_honours_the_key
+
+// **The parameters travel in the string**, which is the whole reason for the format: a record made
+// with weak settings must still verify after the server has raised them.
+@test("a record made with old parameters still verifies after the defaults are raised")
+stored_parameters_are_the_ones_used()
+    var area: []u8 = [0; 64 * 1024]
+
+    val old = hash_password(area, "letmein".bytes, [5; 16], Params(Id, 16, 1, 1))
+
+    assert(check_password(area, old, "letmein".bytes).unwrap(),
+        "the record's own parameters are what check it")
+
+    assert(needs_rehash(old, Params(Id, 64, 3, 1)).unwrap(), "16 blocks is weaker than 64")
+    assert(!needs_rehash(old, Params(Id, 8, 1, 1)).unwrap(), "16 blocks is not weaker than 8")
+    assert(needs_rehash(old, Params(I, 16, 1, 1)).unwrap(), "a different algorithm needs a rehash")
+end stored_parameters_are_the_ones_used
+
+@test("the work area a record needs is answerable without deriving anything")
+work_area_needed_reads_the_record()
+    val stored = encode(Params(Id, 19456, 2, 1), [2; 16], [3; 32])
+
+    assert_eq(work_area_needed(stored).unwrap(), 19456 * 1024)
+    assert_eq(work_area_size(interactive()), 19456 * 1024)
+
+    var small: []u8 = [0; 1024]
+
+    check_password(small, stored, "x".bytes) match
+        Err(WorkArea(n)) -> assert_eq(n, 19456 * 1024)
+        Err(e) -> assert(false, "wanted WorkArea")
+        Ok(b) -> assert(false, "1 KiB cannot hold a 19 MiB work area")
+end work_area_needed_reads_the_record
+
+// **A malformed record is `Err` and a wrong password is `Ok(false)`**, and collapsing the two would
+// make a corrupted database row read as an intruder.
+@test("a record that cannot be read is an error, not a failed login")
+malformed_records_are_errors()
+    assert(parse("").is_err())
+    assert(parse("$argon2id$v=19$m=32,t=3,p=1$AgICAgICAgICAgICAgICAg").is_err())
+    assert(parse("$argon2id$v=19$m=32,t=3,p=1$AgICAgICAgICAgICAgICAg$AwM$extra").is_err())
+
+    parse("$argon2x$v=19$m=32,t=3,p=1$AgICAgICAgICAgICAgICAg$AwMDAwMDAwM") match
+        Err(UnknownAlgorithm) -> ()
+        Err(e) -> assert(false, "wanted UnknownAlgorithm")
+        Ok(s) -> assert(false, "argon2x is not an algorithm")
+
+    parse("$argon2id$v=16$m=32,t=3,p=1$AgICAgICAgICAgICAgICAg$AwMDAwMDAwM") match
+        Err(UnknownVersion) -> ()
+        Err(e) -> assert(false, "wanted UnknownVersion")
+        Ok(s) -> assert(false, "Argon2 1.0 hashes differently and must not be read as 1.3")
+
+    parse("$argon2id$v=19$m=,t=3,p=1$AgICAgICAgICAgICAgICAg$AwMDAwMDAwM") match
+        Err(BadParameter) -> ()
+        Err(e) -> assert(false, "wanted BadParameter")
+        Ok(s) -> assert(false, "an empty m= is not a number")
+
+    parse("$argon2id$v=19$m=32,t=3,p=1$!!!!$AwMDAwMDAwM") match
+        Err(BadEncoding) -> ()
+        Err(e) -> assert(false, "wanted BadEncoding")
+        Ok(s) -> assert(false, "'!' is not base64")
+end malformed_records_are_errors
+
+// A salt that differs by one byte must give a different record — the failure a constant salt causes
+// is silent, and this is the cheapest thing that would notice it.
+@test("the salt reaches the algorithm")
+the_salt_is_not_ignored()
+    var area: []u8 = [0; 32 * 1024]
+    val params = Params(Id, 32, 3, 1)
+
+    val a = hash_password(area, "same".bytes, [1; 16], params)
+    val b = hash_password(area, "same".bytes, [2; 16], params)
+
+    assert(a != b, "two salts must give two records")
+    assert(!check_password(area, a, "same".bytes).is_err())
+    assert(!check_password(area, b, "same".bytes).is_err())
+end the_salt_is_not_ignored
+
+// -- Interoperating with implementations that already exist -----------------------------------------
+
+// **These two records were written by the Rust `argon2` crate**, which is a from-scratch
+// implementation rather than another binding of Monocypher — and it writes the PHC string itself, so
+// they check the *format* as well as the algorithm. Verifying them proves three things at once: that
+// the parameter field is read the way everybody else writes it, that unpadded base64 is decoded
+// correctly, and that the tag agrees byte for byte.
+//
+// Monocypher's own answer was separately confirmed against RFC 9106 above and against Node's
+// `crypto.argon2Sync`, so three independent implementations agree about the algorithm and two about
+// the format.
+@test("a record another implementation wrote verifies here")
+foreign_records_verify()
+    var area: []u8 = [0; 64 * 1024]
+
+    val one = "$argon2id$v=19$m=32,t=3,p=1$AgICAgICAgICAgICAgICAg$" +
+              "N/UxXD8kZoE72CqcqELK66608fI0FQUXp/rgoVdhnos"
+
+    assert(check_password(area, one, "correct horse".bytes).unwrap(),
+        "the Rust crate's record and password must agree here too")
+
+    assert(!check_password(area, one, "correct hors".bytes).unwrap())
+
+    val two = "$argon2id$v=19$m=64,t=2,p=1$BQUFBQUFBQUFBQUFBQUFBQ$" +
+              "r8G8p9Zj3r78fqK9OYOtt1wPl/8UFUTrBjOnS/8VMs4"
+
+    assert(check_password(area, two, "letmein".bytes).unwrap())
+end foreign_records_verify
+
+// The other direction: what this package writes has to be byte-identical to what that crate writes
+// for the same inputs, or a record stored by a sysl service could not be read by anything else.
+@test("this package writes the same record another implementation does")
+records_written_here_match_theirs()
+    var area: []u8 = [0; 64 * 1024]
+
+    assert_eq(hash_password(area, "correct horse".bytes, [2; 16], Params(Id, 32, 3, 1)),
+        "$argon2id$v=19$m=32,t=3,p=1$AgICAgICAgICAgICAgICAg$" +
+        "N/UxXD8kZoE72CqcqELK66608fI0FQUXp/rgoVdhnos")
+
+    assert_eq(hash_password(area, "letmein".bytes, [5; 16], Params(Id, 64, 2, 1)),
+        "$argon2id$v=19$m=64,t=2,p=1$BQUFBQUFBQUFBQUFBQUFBQ$" +
+        "r8G8p9Zj3r78fqK9OYOtt1wPl/8UFUTrBjOnS/8VMs4")
+end records_written_here_match_theirs
+
+// **The `require` on the work area is the only thing between a caller and a heap overflow inside
+// Monocypher.** Verified with AddressSanitizer by calling the C layer directly with a work area one
+// block short: `heap-buffer-overflow monocypher.c:890 in crypto_argon2`. The library trusts the size
+// completely, because it has no way not to — the pointer carries no length.
+@test(should_trap)
+argon2_refuses_a_work_area_the_parameters_outgrow() =
+    var tag: []u8 = [0; 32]
+    var too_small: []u8 = [0; 31 * 1024]
+
+    argon2(tag, too_small, "x".bytes, [2; 16], Params(Id, 32, 3, 1))
+
+@test(should_trap)
+argon2_refuses_a_salt_shorter_than_argon2_allows() =
+    var tag: []u8 = [0; 32]
+    var area: []u8 = [0; 32 * 1024]
+
+    argon2(tag, area, "x".bytes, [2; 4], Params(Id, 32, 3, 1))
+
+// Argon2 requires at least eight blocks per lane, and a caller who raised `lanes` without raising
+// `blocks` would otherwise get whatever Monocypher does with an impossible configuration.
+@test(should_trap)
+argon2_refuses_fewer_than_eight_blocks_a_lane() =
+    var tag: []u8 = [0; 32]
+    var area: []u8 = [0; 32 * 1024]
+
+    argon2(tag, area, "x".bytes, [2; 16], Params(Id, 16, 3, 4))

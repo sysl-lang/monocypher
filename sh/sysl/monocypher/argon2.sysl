@@ -1,0 +1,384 @@
+// Argon2 — the password hash, and the only thing in this package a caller stores rather than sends.
+//
+// **A password hash is not a digest, and the difference is the whole point.** `blake2b` and `sha512`
+// above are fast, which is what makes them right for a message and catastrophic for a password: a
+// stolen table of SHA-512 hashes is tried at billions of guesses a second on a graphics card.
+// Argon2 is deliberately slow *and* deliberately memory-hungry, so that the card's thousands of cores
+// cannot each have a copy of the working state.
+//
+// **Argon2id is the one to use** unless something else is dictated. It runs the data-independent
+// Argon2i over the first half of the first pass and the data-dependent Argon2d over the rest, which
+// is the combination that resists both a side-channel observer and a time-memory trade-off. RFC 9106
+// says so in as many words; `Algorithm.D` and `Algorithm.I` are here because the RFC's vectors cover
+// all three, and a binding that offered only the one an author preferred could not be checked against
+// two thirds of the standard.
+//
+// ## What a server writes
+//
+//     val params = interactive()
+//     var area: Buf[u8] = filled(0, work_area_size(params))     // 19 MiB
+//
+//     val stored = hash_password(area.view(), password, salt, params)   // a PHC string
+//
+// and later, against that string and nothing else:
+//
+//     if check_password(area.view(), stored, attempt)? then …
+//
+// **The parameters travel inside the string**, which is what lets them be raised later without
+// invalidating a single existing password: `check_password` uses the parameters the hash was *made*
+// with, and `needs_rehash` says whether they are below what you now want. Raise them on a successful
+// login, when the plaintext is in hand and re-hashing costs nothing extra.
+//
+// ## The salt is the caller's, as randomness always is here
+//
+// This package cannot generate one — it has no operating system to ask, which is the same reason the
+// README gives for key generation — so `hash_password` takes 16 bytes and trusts them. They must come
+// from the system's random source and must differ for every password. A constant salt makes one
+// precomputed table break every account at once, which is the failure Argon2 exists to prevent.
+
+module sh.sysl.monocypher
+
+import sh.sysl.monocypher.c
+import sysl.slices.as_ptr
+import sysl.text.{str_builder_with_capacity, from_utf8_unchecked}
+import sysl.encoding.{Alphabet, base64_string, base64_decode, base64_decoded_len}
+
+// Which of Argon2's three variants. **`Id` unless you have a reason.**
+enum Algorithm
+    // Data-dependent. The fastest to a given strength and the one with a side channel: its memory
+    // access pattern depends on the password, so an attacker who can watch the cache learns something.
+    // Right for a key derived where nobody is watching, wrong for a login on a shared machine.
+    D
+
+    // Data-independent, so the access pattern says nothing about the password. Weaker against a
+    // time-memory trade-off, and RFC 9106 recommends at least three passes for it.
+    I
+
+    // Both: Argon2i for the first half-pass and Argon2d thereafter. **This is the one to use.**
+    Id
+
+    private[monocypher] value(self) -> u32 = self match
+        D  -> c.ARGON2_D
+        I  -> c.ARGON2_I
+        Id -> c.ARGON2_ID
+
+    private[monocypher] name(self) -> string = self match
+        D  -> "argon2d"
+        I  -> "argon2i"
+        Id -> "argon2id"
+end Algorithm
+
+// How hard the hash is to compute, and therefore to attack.
+struct Params
+    algorithm: Algorithm
+
+    // Memory, in blocks of one kibibyte — so `19456` is 19 MiB. **This is the lever that matters**,
+    // because it is the one a graphics card cannot buy its way past: every parallel guess needs its
+    // own copy. Must be at least `8 * lanes`.
+    blocks: u32
+
+    // How many times the whole memory is swept. Trades time for memory at a fixed strength: halving
+    // the memory and doubling the passes costs an attacker roughly the same and costs a defender the
+    // same, so move it only when memory is what you are short of.
+    passes: u32
+
+    // Argon2's parallelism. **Monocypher is single-threaded whatever this says** — the lanes are
+    // computed one after another — so raising it makes the hash *different* without making it faster
+    // here. It is honoured exactly, which is what lets a hash written by a threaded implementation be
+    // checked by this one.
+    lanes: u32
+end Params
+
+// The version number Argon2 writes into its own state and into the encoded string. `19` is `0x13`,
+// which is Argon2 1.3 and has been the only version in use since 2016.
+const argon2_version: u32 = 19
+
+// OWASP's current first recommendation for a login: **Argon2id, 19 MiB, two passes, one lane.**
+//
+// The Password Storage Cheat Sheet lists four settings of equal strength — `(19456, 2)`, `(12288, 3)`,
+// `(9216, 4)` and `(7168, 5)` — trading memory against time. This is the first; reach for a later one
+// only when 19 MiB per concurrent login is more than the machine has.
+interactive() -> Params = Params(Id, 19456, 2, 1)
+
+// 64 MiB and three passes — for something hashed rarely and worth more than a session: a
+// key-encrypting key, a recovery code, a root credential.
+sensitive() -> Params = Params(Id, 65536, 3, 1)
+
+// How many bytes `work_area` must be for these parameters. One kibibyte per block, which is Argon2's
+// own definition rather than a margin.
+work_area_size(params: Params) -> usize = usize(params.blocks) * 1024
+
+// The salt length this package writes and RFC 9106 recommends. Longer is accepted on the way in.
+const argon2_salt_size: usize = 16
+
+// The tag length `hash_password` writes. 32 bytes is what everything else here calls a key.
+const argon2_hash_size: usize = 32
+
+// Derive `hash.len` bytes from `password` and `salt`.
+//
+// **This is the primitive and it allocates nothing** — `work_area` is scribbled over and must be
+// `work_area_size(params)` bytes. `key` is a server-side pepper kept somewhere the database is not, so
+// that a stolen table is useless without it; `ad` is any extra context to bind the hash to, such as a
+// user id. Both are ordinarily empty.
+argon2(hash: []u8, work_area: []u8, password: []const u8, salt: []const u8,
+       params: Params = interactive(), key: []const u8 = [], ad: []const u8 = [])
+    require hash.len >= 4, "Argon2 will not produce fewer than four bytes"
+    require salt.len >= 8, "Argon2 requires at least eight bytes of salt; sixteen is the recommendation"
+    require params.lanes >= 1, "Argon2 needs at least one lane"
+    require params.passes >= 1, "Argon2 needs at least one pass"
+    require params.blocks >= 8 * params.lanes, "Argon2 needs at least eight blocks per lane"
+    require work_area.len >= work_area_size(params), "the work area is smaller than these parameters"
+
+    val config = c.Argon2Config(params.algorithm.value(), params.blocks, params.passes, params.lanes)
+
+    val inputs = c.Argon2Inputs(as_ptr(password), as_ptr(salt), u32(password.len), u32(salt.len))
+
+    val extras = c.Argon2Extras(as_ptr(key), as_ptr(ad), u32(key.len), u32(ad.len))
+
+    c.argon2(&hash[0], u32(hash.len), &work_area[0], config, inputs, extras)
+end argon2
+
+// ## The stored string
+//
+// The PHC format, which is what every other Argon2 implementation reads and writes:
+//
+//     $argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$hash…
+//
+// Both base64 fields use the standard alphabet **without padding**, which is the format's one
+// idiosyncrasy and the thing an implementation written from the example gets wrong.
+
+// Why an encoded hash could not be read.
+enum PhcError
+    // It is not a PHC string at all: the wrong number of `$`-separated fields, or a field that is not
+    // what its position says it is.
+    Malformed
+
+    // The algorithm field names something other than `argon2d`, `argon2i` or `argon2id`.
+    UnknownAlgorithm
+
+    // `v=` is not 19. Argon2 1.0 exists and hashes differently, and this refuses rather than
+    // computing the wrong thing quietly.
+    UnknownVersion
+
+    // A number in the parameter field is missing or is not a number.
+    BadParameter
+
+    // The salt or hash field is not valid unpadded base64, or decodes to more bytes than this can
+    // hold — 32 of salt and 64 of hash, which is more than any real one.
+    BadEncoding
+
+    // The work area offered is smaller than the *stored* parameters need. `needed` is that size, which
+    // is why it is worth asking `work_area_needed` first.
+    WorkArea(needed: usize)
+end PhcError
+
+// A parsed encoded hash. Everything is copied in, so it outlives the string it came from.
+struct Stored
+    // The parameters this hash was made with — **not the ones currently preferred**, which is the
+    // whole reason they are stored.
+    params: Params
+
+    private salt_bytes: [32]u8
+    private salt_len: usize
+    private hash_bytes: [64]u8
+    private hash_len: usize
+
+    salt(*self) -> []const u8 = self.salt_bytes[0..<self.salt_len]
+
+    hash(*self) -> []const u8 = self.hash_bytes[0..<self.hash_len]
+end Stored
+
+// Read an encoded hash.
+parse(encoded: string) -> Result[Stored, PhcError]
+    val b = encoded.bytes
+
+    // Five fields, the first empty because the string begins with `$`.
+    var starts: [6]usize = [0; 6]
+    var found: usize = 0
+
+    for i in 0..<b.len
+        if b[i] == u8('$')
+            if found >= 6 then return Err(Malformed)
+            starts[found] = i
+            found += 1
+
+    if found != 5 then return Err(Malformed)
+
+    val algorithm = field(b, starts, 1)
+    val version = field(b, starts, 2)
+    val settings = field(b, starts, 3)
+    val salt_text = field(b, starts, 4)
+    val hash_text = b[starts[4] + 1..]
+
+    var alg = Algorithm.Id
+
+    if same(algorithm, "argon2id") then alg = Algorithm.Id
+    elif same(algorithm, "argon2i") then alg = Algorithm.I
+    elif same(algorithm, "argon2d") then alg = Algorithm.D
+    else return Err(UnknownAlgorithm)
+
+    if !same(version[0..<2], "v=") then return Err(Malformed)
+
+    number(version[2..]) match
+        Some(v) -> if v != argon2_version then return Err(UnknownVersion)
+        None -> return Err(BadParameter)
+
+    val m = setting(settings, 'm')?
+    val t = setting(settings, 't')?
+    val p = setting(settings, 'p')?
+
+    var out = Stored(Params(alg, m, t, p), [0; 32], 0, [0; 64], 0)
+
+    out.salt_len = decode_into(salt_text, out.salt_bytes[..])?
+    out.hash_len = decode_into(hash_text, out.hash_bytes[..])?
+
+    if out.salt_len < 8 || out.hash_len < 4 then return Err(BadEncoding)
+
+    Ok(out)
+end parse
+
+// How large a work area `check_password` will want for this stored hash, without re-deriving it.
+//
+// **A server has to ask** — the parameters are the ones the password was hashed with, which may be
+// lower or higher than what it uses today.
+work_area_needed(encoded: string) -> Result[usize, PhcError] =
+    Ok(work_area_size(parse(encoded)?.params))
+
+// Hash `password` and answer the PHC string to store.
+//
+// `salt` must be at least eight bytes of real randomness and should be sixteen; see the note at the
+// top of this file about where it comes from. **This is the one function here that allocates**,
+// because it builds a `string`; `argon2` above does not.
+hash_password(work_area: []u8, password: []const u8, salt: []const u8,
+              params: Params = interactive(), key: []const u8 = [],
+              ad: []const u8 = []) -> string
+    var hash: [32]u8 = [0; 32]
+
+    argon2(hash[..], work_area, password, salt, params, key, ad)
+
+    encode(params, salt, hash[..])
+end hash_password
+
+// The PHC string for parameters, salt and hash that are already in hand.
+encode(params: Params, salt: []const u8, hash: []const u8) -> string
+    var b = str_builder_with_capacity(80 + salt.len * 2 + hash.len * 2)
+
+    b.push("$")
+    b.push(params.algorithm.name())
+    b.push("$v=")
+    b.push(s"${argon2_version}")
+    b.push("$m=")
+    b.push(s"${params.blocks},t=${params.passes},p=${params.lanes}")
+    b.push("$")
+    b.push(base64_string(salt, Alphabet.Standard, false))
+    b.push("$")
+    b.push(base64_string(hash, Alphabet.Standard, false))
+
+    b.finish()
+end encode
+
+// Whether `password` is the one `encoded` was made from.
+//
+// **`Ok(false)` is a wrong password and `Err` is a question that could not be asked** — a malformed
+// record, an unknown algorithm, a work area too small. Collapsing the two would make a corrupted row
+// in the database read as an intruder.
+//
+// The comparison is constant-time, which matters here for the same reason it matters for a MAC.
+check_password(work_area: []u8, encoded: string, password: []const u8,
+               key: []const u8 = [], ad: []const u8 = []) -> Result[bool, PhcError]
+    var stored = parse(encoded)?
+
+    val needed = work_area_size(stored.params)
+
+    if work_area.len < needed then return Err(WorkArea(needed))
+
+    var got: [64]u8 = [0; 64]
+
+    val n = stored.hash().len
+
+    argon2(got[0..<n], work_area, password, stored.salt(), stored.params, key, ad)
+
+    Ok(equal_bytes(got[0..<n], stored.hash()))
+end check_password
+
+// Whether this hash was made with parameters weaker than `want`.
+//
+// **This is how parameters are raised.** Call it after a successful `check_password`, while the
+// plaintext is still in hand, and re-hash the ones that answer `true`; existing passwords stay valid
+// in the meantime because their own parameters travel with them.
+needs_rehash(encoded: string, want: Params = interactive()) -> Result[bool, PhcError]
+    val have = parse(encoded)?.params
+
+    Ok(have.algorithm != want.algorithm || have.blocks < want.blocks
+        || have.passes < want.passes || have.lanes != want.lanes)
+
+// -- reading the format ------------------------------------------------------------------------------
+
+private field(b: []const u8, starts: [6]usize, i: usize) -> []const u8 =
+    b[starts[i - 1] + 1..<starts[i]]
+
+private same(b: []const u8, text: string) -> bool
+    if b.len != text.bytes.len then return false
+
+    for i in 0..<b.len
+        if b[i] != text.bytes[i] then return false
+
+    true
+end same
+
+private number(b: []const u8) -> Option[u32]
+    if b.len == 0 || b.len > 10 then return None
+
+    var n: u32 = 0
+
+    for x in b
+        if x < u8('0') || x > u8('9') then return None
+        n = n * 10 + u32(x - u8('0'))
+
+    Some(n)
+end number
+
+// `m=19456,t=2,p=1` — pull one of the three out by its letter.
+private setting(b: []const u8, letter: char) -> Result[u32, PhcError]
+    var at: usize = 0
+
+    loop
+        if at + 1 >= b.len then return Err(BadParameter)
+        if b[at + 1] != u8('=') then return Err(Malformed)
+
+        var end = at + 2
+
+        while end < b.len && b[end] != u8(',') do end += 1
+
+        if b[at] == u8(letter)
+            number(b[at + 2..<end]) match
+                Some(v) -> return Ok(v)
+                None -> return Err(BadParameter)
+
+        if end >= b.len then return Err(BadParameter)
+
+        at = end + 1
+end setting
+
+private decode_into(text: []const u8, into: []u8) -> Result[usize, PhcError]
+    if text.len == 0 then return Err(BadEncoding)
+
+    if base64_decoded_len(text) > into.len then return Err(BadEncoding)
+
+    base64_decode(text, into) match
+        Ok(n) -> Ok(n)
+        Err(e) -> Err(BadEncoding)
+end decode_into
+
+// `equal` above takes only the three lengths Monocypher's `crypto_verify*` offer, and an Argon2 tag is
+// any length the caller asked for. **This is still constant time**: it reads every byte of both, and
+// the result depends on nothing but their contents.
+private equal_bytes(a: []const u8, b: []const u8) -> bool
+    if a.len != b.len then return false
+
+    var differences: u8 = 0
+
+    for i in 0..<a.len do differences = differences | (a[i] ^ b[i])
+
+    differences == 0
+end equal_bytes
