@@ -2,7 +2,7 @@ module sh.sysl.monocypher
 
 import sh.sysl.monocypher.c
 import sysl.slices.{as_ptr, as_mut_ptr}
-import sysl.text.str_builder_with_capacity
+import sysl.encoding.hex_string
 
 // Cryptography, bound to Monocypher 4.0.3.
 //
@@ -269,19 +269,16 @@ end wipe
 //
 // **Not Monocypher's, and not cryptography.** It is here because everything above answers in bytes
 // and every way of checking the answer -- a test vector, a log line, a value pasted into an issue --
-// is hexadecimal, and sysl's library has no renderer for a byte string. A binding whose entire output
-// were unprintable would be one every caller had to write this for.
+// is hexadecimal. A binding whose entire output were unprintable would be one every caller had to
+// write this for.
+//
+// **It is the library's renderer, and it used to be a copy.** The paragraph above once continued
+// "and sysl's library has no renderer for a byte string", which was true when it was written and is
+// not now: `sysl.encoding.hex_string` says the same thing, in lower case, and this is the name it
+// answers to here. The name stays because it is what a caller of this package reaches for beside
+// `lock` and `sign`, and because `argon2.sysl` next door already reaches into the same module for
+// base64.
 //
 // It is also the one function in this file that allocates, since it builds a `string`. The
 // cryptography does not.
-hex(bytes: []const u8) -> string
-    var b = str_builder_with_capacity(bytes.len * 2)
-
-    for x in bytes
-        b.push_char(hex_digit(x >> 4))
-        b.push_char(hex_digit(x & 15))
-
-    b.finish()
-end hex
-
-private hex_digit(v: u8) -> char = if v < 10 then char(48 + u32(v)) else char(87 + u32(v))
+hex(bytes: []const u8) -> string = hex_string(bytes)

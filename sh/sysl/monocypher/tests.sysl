@@ -1,6 +1,7 @@
 module sh.sysl.monocypher
 
 import sh.sysl.monocypher.c
+import sysl.encoding.{hex_decode, hex_decoded_len}
 import sysl.text.Search
 
 // The published test vectors, run by `sysl test .`.
@@ -18,16 +19,16 @@ import sysl.text.Search
 // was reached; it does not prove that `unlock` rejects a message somebody altered, or that passing
 // a 31-byte key stops rather than reading a byte off the end.
 
-private nib(c: u8) -> u8 = if c >= 97 then c - 87 elif c >= 65 then c - 55 else c - 48
-
 // The inverse of `hex`, for writing a vector the way the specification prints it.
+//
+// It is `sysl.encoding.hex_decode` rather than a reader of its own. The one it replaces accepted a
+// non-digit and folded it into a wrong byte, which in a file whose every string is somebody else's
+// published vector is the failure mode that matters: a mistyped digit would have silently changed
+// what the algorithm was asked to prove.
 private unhex(s: string) -> []u8
-    require s.bytes.len % 2 == 0, "a hexadecimal byte string has an even number of digits"
+    var out: []u8 = [0; hex_decoded_len(s.bytes)]
 
-    val b = s.bytes
-    var out: []u8 = [0; b.len / 2]
-
-    for i in 0..<out.len do out[i] = nib(b[i * 2]) * 16 + nib(b[i * 2 + 1])
+    hex_decode(s.bytes, out).expect("a published vector, written as hexadecimal")
 
     out
 end unhex
@@ -696,3 +697,18 @@ argon2_refuses_fewer_than_eight_blocks_a_lane() =
     var area: []u8 = [0; 32 * 1024]
 
     argon2(tag, area, "x".bytes, [2; 16], Params(Id, 16, 3, 4))
+
+// -- what `hex` promises, at the edges the vectors never reach -------------------------------------
+
+// Every vector above passes `hex` a digest of 32 or 64 bytes, so none of them would notice if the
+// empty case or the leading zero changed. These pin what a caller may rely on.
+@test("hex of nothing is the empty string, not a placeholder")
+hex_of_no_bytes_is_empty() =
+    val none: []const u8 = [0; 0]
+
+    assert(hex(none) == "", "an empty slice renders as an empty string")
+
+@test("hex writes two lower-case digits a byte, leading zero included")
+hex_pads_and_lowercases_every_byte() =
+    assert(hex([u8(0), u8(15), u8(16), u8(255)]) == "000f10ff",
+           "one byte is two digits, the low nibble is not promoted, and the letters are lower")
