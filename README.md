@@ -3,6 +3,8 @@
 Cryptography for [sysl](https://github.com/sysl-lang/sysl) — authenticated encryption, key exchange,
 signatures and hashing, bound to [Monocypher](https://monocypher.org) 4.0.3.
 
+*An independent sysl package for Monocypher. It is not affiliated with or endorsed by Monocypher's authors or trademark holders.*
+
 **Nothing has to be installed to use this.** Monocypher is two C files that include `<stddef.h>` and
 `<stdint.h>` and nothing else, and this package carries them: sysl compiles a library's C as part of
 the build, so there is no `-l` flag, no `pkg-config`, and no build script anywhere in this
