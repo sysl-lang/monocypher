@@ -14,7 +14,7 @@ import sysl.encoding.hex_string
 // that lets this build for a freestanding target as readily as for a host.
 //
 // **Monocypher includes `<stddef.h>` and `<stdint.h>` and nothing else.** It allocates nothing, opens
-// nothing, and asks the operating system for nothing, which is why `package.hocon` names no
+// nothing, and asks the operating system for nothing, which is why `sysl.hocon` names no
 // capability and why this builds for a freestanding target. Every function below writes into storage
 // the caller already has.
 //

@@ -11,7 +11,7 @@ the build, so there is no `-l` flag, no `pkg-config`, and no build script anywhe
 repository. That is also why there is no `@link` in the binding's header — there is no external
 library to name.
 
-It is also why `package.hocon` declares **no capabilities at all**. Monocypher opens no file, reads
+It is also why `sysl.hocon` declares **no capabilities at all**. Monocypher opens no file, reads
 no clock, calls no allocator and asks the operating system for nothing, so there is nothing to
 require and this builds for a freestanding target as readily as for a host.
 
@@ -25,7 +25,7 @@ sh/sysl/monocypher/
         monocypher.h
         monocypher-ed25519.c    the optional module: SHA-512 and RFC 8032 Ed25519
         monocypher-ed25519.h
-package.hocon               who this package is, and what it needs of the machine
+sysl.hocon                  who this package is, and what it needs of the machine
 ```
 
 **Everything that is C lives in `c/`**, module `sh.sysl.monocypher.c`. That is the two-layer shape every
@@ -52,16 +52,16 @@ claims a name nobody else will mint rather than the top-level word `monocypher`.
 
 ## Using it
 
-Name it in your project's `package.hocon` and `sysl build` fetches it:
+Name it in your project's `sysl.hocon` and `sysl build` fetches it:
 
 ```hocon
 dependencies {
-  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.4.0" }
+  monocypher { git = "github.com/sysl-lang/monocypher", version = "0.4.1" }
 }
 ```
 
 The coordinate is an identity rather than a URL, so it carries no `https://`, and `version` is the
-tag `v0.4.0` here. Resolution clones it, selects versions by MVS, and records what arrived in
+tag `v0.4.1` here. Resolution clones it, selects versions by MVS, and records what arrived in
 `sysl.sum`.
 
 Or build it into an artifact and compile against that, which needs no fetching and is what this
